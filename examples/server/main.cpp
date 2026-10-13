@@ -10,9 +10,14 @@
 #include "ced_tagger.hpp"     // pk::CedTagger
 #include "sound_stream.hpp"   // pk::SoundStream, pk::SoundSegment
 #include "audio_io.hpp"       // pk::resample_linear
+#include "phrase_boost.hpp"
+#include <nlohmann/json.hpp>
 
+#include <charconv>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -54,7 +59,7 @@ void usage() {
         "  parakeet-server --model <path|url|alias> [--host 127.0.0.1] "
         "[--port 8080] [--threads N] [--concurrency K] [--cache-dir <dir>] [--sound-model <path>]\n"
         "\n"
-        "Serves POST /v1/audio/transcriptions (OpenAI-compatible) for one model.\n"
+        "Serves POST /v1/audio/transcriptions (OpenAI-compatible); requested models stay loaded.\n"
         "--concurrency K runs up to K transcriptions at once on K CPU backends "
         "(default 1); --threads is then the thread count of each backend, and "
         "K x threads should not exceed the physical cores.\n"
@@ -127,6 +132,9 @@ int main(int argc, char** argv) {
         concurrency = eff;
     }
     const bool pooled = concurrency > 1;
+    std::map<std::string, std::unique_ptr<pk::Model>> models;
+    models.emplace(model_path, std::move(model));
+    std::mutex models_mu;
 
     // --sound-model is a local path only; it does not go through the ASR
     // model's alias/URL resolver.
@@ -166,11 +174,91 @@ int main(int argc, char** argv) {
 
         if (!req.has_file("file")) { fail(400, "missing required field 'file'"); return; }
 
+        pk::Model* model;
+        {
+            std::lock_guard<std::mutex> lock(models_mu);
+            std::string path = model_path;
+            if (req.has_file("model")) {
+                const std::string& requested = req.get_file_value("model").content;
+                if (!requested.empty() && requested != "parakeet" && requested != model_arg) {
+                    ModelSource source;
+                    std::string error;
+                    if (!resolve_model(requested, source, error)) { fail(400, error); return; }
+                    try {
+                        path = fetch_model(source, cache_dir);
+                    } catch (const std::exception& e) {
+                        fail(500, e.what());
+                        return;
+                    }
+                }
+            }
+            auto found = models.find(path);
+            if (found == models.end()) {
+                auto loaded = pk::Model::load(path);
+                if (!loaded) { fail(500, "failed to load model " + path); return; }
+                if (pooled) loaded->set_concurrency(concurrency, threads);
+                found = models.emplace(path, std::move(loaded)).first;
+                std::fprintf(stderr, "parakeet-server: loaded model %s\n", path.c_str());
+            }
+            // Models stay loaded until the HTTP workers have stopped.
+            model = found->second.get();
+        }
+
         // response_format (default json)
         Format fmt = Format::kJson;
         if (req.has_file("response_format")) {
             const std::string& rf = req.get_file_value("response_format").content;
             if (!parse_format(rf, fmt)) { fail(400, "unsupported response_format '" + rf + "'"); return; }
+        }
+
+        std::vector<std::pair<std::string, float>> boost_phrases;
+        float boost_score = 2.0f;
+        if (req.has_file("boost_score")) {
+            const std::string& value = req.get_file_value("boost_score").content;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), boost_score);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                !std::isfinite(boost_score) || boost_score < 0 || !req.has_file("boost_phrase")) {
+                fail(400, "boost_score must be finite and non-negative, with at least one boost_phrase");
+                return;
+            }
+        }
+        for (const auto& phrase : req.get_file_values("boost_phrase"))
+            boost_phrases.emplace_back(phrase.content, boost_score);
+        if (req.has_file("boost_phrases")) {
+            if (req.has_file("boost_phrase") || req.has_file("boost_score")) {
+                fail(400, "boost_phrases cannot be combined with boost_phrase or boost_score");
+                return;
+            }
+            try {
+                const auto phrases = nlohmann::json::parse(req.get_file_value("boost_phrases").content);
+                if (!phrases.is_object()) {
+                    fail(400, "boost_phrases must be a JSON object mapping phrases to numeric strengths");
+                    return;
+                }
+                for (const auto& item : phrases.items()) {
+                    if (!item.value().is_number()) {
+                        fail(400, "phrase strengths must be numbers");
+                        return;
+                    }
+                    boost_phrases.emplace_back(item.key(), item.value().get<float>());
+                }
+            } catch (const nlohmann::json::exception&) {
+                fail(400, "invalid boost_phrases JSON");
+                return;
+            }
+        }
+        std::unique_ptr<pk::PhraseBoost> boost;
+        if (!boost_phrases.empty()) {
+            if (model->config().tdt_durations.empty() || fmt == Format::kVerboseJson) {
+                fail(400, "phrase boosting requires a TDT model and response_format json or text");
+                return;
+            }
+            try {
+                boost = std::make_unique<pk::PhraseBoost>(model->loader().tokenizer_pieces(), boost_phrases);
+            } catch (const std::invalid_argument& e) {
+                fail(400, e.what());
+                return;
+            }
         }
 
         // timestamp_granularities[] = word -> include words[]
@@ -197,7 +285,7 @@ int main(int argc, char** argv) {
                 // the tagger (not thread-safe) takes the lock.
                 std::unique_lock<std::mutex> lock(infer_mu, std::defer_lock);
                 if (!pooled) lock.lock();
-                tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault);
+                tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get());
 
                 // Sound tagging is verbose_json-only so json/text requests never
                 // pay for it. Runs under the same lock as ASR: the tagger is not
@@ -240,6 +328,7 @@ int main(int argc, char** argv) {
                  host.c_str(), port, model_path.c_str());
     bool ok = svr.listen(host.c_str(), port);
     g_server = nullptr;
+    models.clear();
     pk::shutdown_backend();
     if (!ok) {
         std::fprintf(stderr, "parakeet-server: failed to bind %s:%d\n", host.c_str(), port);

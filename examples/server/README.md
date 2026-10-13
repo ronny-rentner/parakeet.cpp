@@ -4,17 +4,19 @@ A small OpenAI-drop-in HTTP server for transcription, built on parakeet.cpp.
 Point any OpenAI client's `base_url` at it and call
 `POST /v1/audio/transcriptions`.
 
-This is an example, not a production service. It serves one model, runs one
-transcription at a time, and accepts WAV uploads only.
+This is an example, not a production service. It keeps requested models loaded,
+runs one transcription at a time by default, and accepts WAV uploads only.
 
 For a production deployment, use [LocalAI](https://localai.io), which embeds
 parakeet.cpp as a backend and adds the things this example deliberately leaves
-out: a model gallery, concurrency, multi-model serving, the full OpenAI API
+out: a model gallery, the full OpenAI API
 surface, auth, and metrics.
 
 ## Build
 
 Built by default with the rest of the project (`PARAKEET_BUILD_SERVER=ON`):
+
+The experimental phrase-boosting API requires `nlohmann-json3-dev` on Debian.
 
 ```sh
 cmake -B build && cmake --build build --target parakeet-server -j
@@ -109,8 +111,26 @@ fetcher used by `--model`.
 
 ## Supported
 
+- `model`: a path, URL, or alias, using the same resolver as `--model`. The first
+  request loads it; later requests reuse it. Models remain loaded until the
+  server exits. Omitted, empty, or `parakeet` selects the startup model.
+  Loading is serialized; an already-running transcription can continue during
+  loading, but new requests wait for the load to finish.
 - `response_format`: `json` (default), `text`, `verbose_json`.
+- `boost_phrase`: repeat this field for each word or phrase to favor during TDT
+  decoding. Matching ignores English letter case and follows word boundaries;
+  punctuation in the output is preserved. Uses greedy decoding.
+- `boost_score`: non-negative strength, default `2` when phrases are supplied;
+  `0` leaves scores unchanged. The bonus is distributed across a phrase's
+  characters, with partial-match bonuses cancelled on a mismatch. Bonuses are
+  applied before token normalization, so this is contextual logit biasing,
+  not an external language model. Boosted requests support `json` or `text`.
 - `timestamp_granularities[]=word` adds a `words` array to `verbose_json`.
+- `boost_phrases`: JSON object mapping each word or phrase to its own non-negative
+  strength, for example `{"symlink":6,"home dir":4,"grammar":3}`. Use this field
+  instead of `boost_phrase` and `boost_score`; combining them returns an error.
+  Matching and score application follow the same rules as shared-strength boosting.
+  Matches ending at the same boundary use the strongest completed bonus.
 - `--sound-model` adds a `sound_events` array to `verbose_json`.
 
 ## Known simplifications
@@ -119,8 +139,6 @@ fetcher used by `--model`.
 - `verbose_json` emits a single `segment` spanning the whole transcript;
   Parakeet has no native segmentation. Word timestamps are real.
 - `language` in `verbose_json` is a fixed `en` placeholder.
-- `model` in the request is accepted but ignored; the process serves the one
-  model given to `--model`.
 - `temperature` and `prompt` are accepted and ignored (greedy decode).
 - Inference is serialized by a mutex. For real parallelism, hold a pool of
   `pk::Model` contexts instead of one.

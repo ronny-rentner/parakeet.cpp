@@ -115,7 +115,7 @@ public:
     Transcription transcribe_with_timestamps(
         const std::vector<float>& pcm, int sample_rate,
         Decoder decoder = Decoder::kDefault,
-        const std::string& target_lang = "") const;
+        const std::string& target_lang = "", const PhraseBoost* boost = nullptr) const;
 
     // Convenience: transcribe a WAV file with timestamps + confidence.
     Transcription transcribe_path_with_timestamps(
@@ -227,7 +227,7 @@ private:
     // two timestamp entry points.
     Transcription transcribe_16k_with_timestamps(
         const std::vector<float>& pcm16k, Decoder decoder,
-        const std::string& target_lang = "") const;
+        const std::string& target_lang = "", const PhraseBoost* boost = nullptr) const;
 
     // VAD path: encode each 16 kHz clip on its own, decode them in groups of up
     // to kVadDecodeGroup with the exact batched decode (TDT and RNNT; CTC decodes

@@ -7,6 +7,8 @@
 
 namespace pk {
 
+class PhraseBoost;
+
 // One non-blank token emitted by TDT beam search.
 //
 // `frame` is the encoder frame at which the token was emitted. `duration` is
@@ -78,7 +80,8 @@ std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
                                 const std::vector<float>& enc, int T, int enc_hidden,
                                 const std::vector<int32_t>& durations,
                                 int blank_id, int max_symbols,
-                                std::vector<TokenInfo>* tokens = nullptr);
+                                std::vector<TokenInfo>* tokens = nullptr,
+                                const PhraseBoost* boost = nullptr);
 
 // Sequence-level beam search for TDT models, matching NeMo BeamTDTInfer's
 // `default_beam_search`:

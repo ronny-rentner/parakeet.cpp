@@ -1,5 +1,6 @@
 #include "tdt.hpp"
 #include "decode_common.hpp"
+#include "phrase_boost.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -12,7 +13,7 @@ std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
                                 const std::vector<float>& enc, int T, int enc_hidden,
                                 const std::vector<int32_t>& durations,
                                 int blank_id, int max_symbols,
-                                std::vector<TokenInfo>* tokens) {
+                                std::vector<TokenInfo>* tokens, const PhraseBoost* boost) {
     assert((int)enc.size() == (size_t)T * enc_hidden);
     assert(!durations.empty());
 
@@ -23,6 +24,7 @@ std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
     assert(num_dur == joint.num_durations());
 
     std::vector<int32_t> hyp;
+    int boost_state = boost ? boost->initial_state() : 0;
     if (tokens) tokens->clear();
 
     // Committed (non-blank) decoding state and last emitted token.
@@ -78,12 +80,14 @@ std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
                               g.data(), (int)g.size(), logits);
 
             // Split: token logits [0, token_count), duration logits [token_count, V_plus).
+            if (boost) boost->apply(logits, boost_state);
             const int k   = decode_argmax(logits.data(), token_count);
             const int d_k = decode_argmax(logits.data() + token_count, num_dur);
             skip = durations[d_k];
 
             // Commit state + last_token ONLY when k != blank.
             if (k != blank_id) {
+                if (boost) boost_state = boost->advance(boost_state, k);
                 hyp.push_back((int32_t)k);
                 if (tokens) {
                     // NeMo per-token metadata (matches GreedyTDTInfer._greedy_decode
