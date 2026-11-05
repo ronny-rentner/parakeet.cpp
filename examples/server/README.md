@@ -43,9 +43,10 @@ Supported). A model that served no request for `--unload-after` seconds is
 unloaded (default 300, `0` keeps models loaded) and loaded again by the next
 request that names it.
 
-With a published model by alias (downloaded once and cached under
-`${XDG_CACHE_HOME:-$HOME/.cache}/parakeet.cpp/models`, override with
-`--cache-dir` or `PARAKEET_CACHE_DIR`):
+With a published model by alias, downloaded once into the model directory,
+`${XDG_CACHE_HOME:-$HOME/.cache}/parakeet.cpp/models` unless set with
+`--model-dir` or `PARAKEET_MODEL_DIR`. `--fetch` downloads models into that
+directory without serving:
 
 ```sh
 ./build/examples/server/parakeet-server --model tdt_ctc-110m-q4_k

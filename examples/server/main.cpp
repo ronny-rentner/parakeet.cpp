@@ -61,8 +61,10 @@ void usage() {
     std::fprintf(stderr,
         "usage:\n"
         "  parakeet-server --model <path|url|alias> [--host 127.0.0.1] "
-        "[--port 8080] [--threads N] [--concurrency K] [--cache-dir <dir>] [--sound-model <path>] [--unload-after SEC]\n"
+        "[--port 8080] [--threads N] [--concurrency K] [--model-dir <dir>] [--sound-model <path>] [--unload-after SEC]\n"
+        "  parakeet-server --fetch <url|alias|name.gguf> [--fetch ...] [--model-dir <dir>]\n"
         "\n"
+        "--fetch downloads each model into the cache directory and exits without serving.\n"
         "Serves POST /v1/audio/transcriptions (OpenAI-compatible). A request may name another GGUF\n"
         "from the --model directory; models unused for --unload-after seconds are unloaded (default 300, 0 keeps them).\n"
         "--concurrency K runs up to K transcriptions at once on K CPU backends "
@@ -75,7 +77,8 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string model_arg, host = "127.0.0.1", cache_dir, sound_model;
+    std::string model_arg, host = "127.0.0.1", model_dir, sound_model;
+    std::vector<std::string> fetch;
     int port = 8080, threads = 0, concurrency = 1, unload_after = 300;
 
     for (int i = 1; i < argc; ++i) {
@@ -89,9 +92,10 @@ int main(int argc, char** argv) {
         else if (a == "--port")    port = std::atoi(next("--port").c_str());
         else if (a == "--threads") threads = std::atoi(next("--threads").c_str());
         else if (a == "--concurrency") concurrency = std::atoi(next("--concurrency").c_str());
-        else if (a == "--cache-dir") cache_dir = next("--cache-dir");
+        else if (a == "--model-dir") model_dir = next("--model-dir");
         else if (a == "--sound-model") sound_model = next("--sound-model");
         else if (a == "--unload-after") unload_after = std::atoi(next("--unload-after").c_str());
+        else if (a == "--fetch")   fetch.push_back(next("--fetch"));
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else if (a == "--version" || a == "-V") {
             std::printf("parakeet-server %s\n", parakeet_version());
@@ -99,8 +103,25 @@ int main(int argc, char** argv) {
         }
         else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
     }
+    if (model_dir.empty()) model_dir = pkserver::default_model_dir();
+    if (!fetch.empty()) {
+        for (const std::string& name : fetch) {
+            pkserver::ModelSource src;
+            std::string err;
+            if (!pkserver::resolve_model(name, src, err)) {
+                std::fprintf(stderr, "parakeet-server: %s\n", err.c_str());
+                return 2;
+            }
+            try {
+                std::fprintf(stderr, "parakeet-server: %s\n", pkserver::fetch_model(src, model_dir).c_str());
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "parakeet-server: %s\n", e.what());
+                return 1;
+            }
+        }
+        return 0;
+    }
     if (model_arg.empty()) { usage(); return 2; }
-    if (cache_dir.empty()) cache_dir = pkserver::default_cache_dir();
 
     // Resolve and fetch the model before binding the socket.
     pkserver::ModelSource src;
@@ -113,7 +134,7 @@ int main(int argc, char** argv) {
     try {
         if (src.kind == pkserver::ModelSource::kUrl)
             std::fprintf(stderr, "parakeet-server: fetching %s\n", src.value.c_str());
-        model_path = pkserver::fetch_model(src, cache_dir);
+        model_path = pkserver::fetch_model(src, model_dir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "parakeet-server: %s\n", e.what());
         return 1;

@@ -96,8 +96,11 @@ bool resolve_model(const std::string& arg, ModelSource& out, std::string& err) {
     return false;
 }
 
-std::string default_cache_dir() {
-    if (const char* c = std::getenv("PARAKEET_CACHE_DIR"); c && *c) return c;
+std::string default_model_dir() {
+    if (const char* c = std::getenv("PARAKEET_MODEL_DIR"); c && *c) return c;
+#ifdef PARAKEET_MODEL_DIR
+    return PARAKEET_MODEL_DIR;
+#endif
     std::string base;
     if (const char* x = std::getenv("XDG_CACHE_HOME"); x && *x) {
         base = x;

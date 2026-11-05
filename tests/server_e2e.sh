@@ -30,7 +30,7 @@ case "$READY_TIMEOUT" in
 esac
 [ "$READY_TIMEOUT" -gt 0 ] || { echo "server_e2e: PARAKEET_SERVER_E2E_READY_TIMEOUT must be > 0"; exit 1; }
 
-"$SERVER" --model tdt_ctc-110m-q4_k --port "$PORT" --cache-dir "$CACHE" &
+"$SERVER" --model tdt_ctc-110m-q4_k --port "$PORT" --model-dir "$CACHE" &
 SRV=$!
 
 # Wait for /health. The server binds only after first-run model download + load.
