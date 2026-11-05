@@ -11,14 +11,15 @@ Any file name from https://huggingface.co/mudler/parakeet-cpp-gguf works, as
 do the aliases and URLs described in README.md in this directory.
 
 Set the model to serve, the device and further options in
-/etc/default/parakeet-server, then enable the service:
+/etc/default/parakeet-server, then enable the service. It listens on
+127.0.0.1:8081 by default:
 
     sudo systemctl enable --now parakeet-server
 
 A request may select any other fetched model by file name:
 
     curl -F file=@audio.wav -F model=tdt-0.6b-v3-q8_0.gguf \
-        http://127.0.0.1:8080/v1/audio/transcriptions
+        http://127.0.0.1:8081/v1/audio/transcriptions
 
 The service runs as a dynamic user in the render and video groups, so
 PARAKEET_DEVICE=Vulkan0 in /etc/default/parakeet-server can use the GPU.

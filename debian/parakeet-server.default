@@ -6,4 +6,4 @@ PARAKEET_MODEL=tdt-0.6b-v2-q8_0.gguf
 #PARAKEET_DEVICE=Vulkan0
 
 # Further options, see parakeet-server --help.
-PARAKEET_ARGS=--port 8080
+PARAKEET_ARGS=--port 8081

@@ -1,3 +1,9 @@
+parakeet-cpp (0.6.1+git20261105.7e6f040-2) forky; urgency=medium
+
+  * Listen on port 8081 by default; 8080 is commonly taken.
+
+ -- Ronny Rentner <debian@ronny-rentner.de>  Thu, 05 Nov 2026 15:45:00 +0100
+
 parakeet-cpp (0.6.1+git20261105.7e6f040-1) forky; urgency=medium
 
   * Build of the ronny-rentner fork at commit 7e6f040: upstream 0.6.1 plus
