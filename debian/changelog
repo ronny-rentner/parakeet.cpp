@@ -1,0 +1,6 @@
+parakeet-cpp (0.6.1+git20261105.c3489f2-1) forky; urgency=medium
+
+  * Build of the ronny-rentner fork at commit c3489f2: upstream 0.6.1 plus
+    phrase boosting, model selection by file name and idle unloading.
+
+ -- Ronny Rentner <debian@ronny-rentner.de>  Thu, 05 Nov 2026 15:11:54 +0100

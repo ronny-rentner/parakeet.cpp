@@ -1,0 +1,27 @@
+Source: parakeet-cpp
+Section: sound
+Priority: optional
+Maintainer: Ronny Rentner <debian@ronny-rentner.de>
+Homepage: https://github.com/mudler/parakeet.cpp
+Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               git,
+               glslc,
+               libvulkan-dev
+
+Package: parakeet-cli
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: NVIDIA Parakeet speech recognition command line tool
+ parakeet-cli transcribes WAV files with NVIDIA NeMo Parakeet models
+ converted to GGUF, running on the CPU or a Vulkan GPU through ggml.
+
+Package: parakeet-server
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: curl
+Description: NVIDIA Parakeet speech recognition HTTP server
+ parakeet-server answers POST /v1/audio/transcriptions like the OpenAI
+ API, with phrase boosting, model selection per request and unloading of
+ idle models.

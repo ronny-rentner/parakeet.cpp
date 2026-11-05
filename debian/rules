@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+UPSTREAM_VERSION = $(shell dpkg-parsechangelog -SVersion | sed 's/-[^-]*$$//')
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=debian/obj
+
+# ggml is linked statically so the two binaries need no private library directory.
+# GGML_NATIVE=OFF keeps the binaries portable; AVX2/FMA/F16C is the x86-64-v3 baseline.
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DPARAKEET_VERSION=$(UPSTREAM_VERSION) \
+		-DPARAKEET_BUILD_CLI=ON \
+		-DPARAKEET_BUILD_SERVER=ON \
+		-DPARAKEET_BUILD_TESTS=OFF \
+		-DPARAKEET_GGML_VULKAN=ON \
+		-DBUILD_SHARED_LIBS=OFF \
+		-DGGML_NATIVE=OFF \
+		-DGGML_AVX2=ON \
+		-DGGML_FMA=ON \
+		-DGGML_F16C=ON
+
+# The upstream build has no install rules.
+override_dh_auto_install:
+	install -D -m 755 debian/obj/examples/cli/parakeet-cli debian/parakeet-cli/usr/bin/parakeet-cli
+	install -D -m 755 debian/obj/examples/server/parakeet-server debian/parakeet-server/usr/bin/parakeet-server

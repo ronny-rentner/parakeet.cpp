@@ -1,0 +1,9 @@
+# build output of debhelper
+.debhelper/
+debhelper-build-stamp
+files
+*.substvars
+*.debhelper.log
+obj/
+parakeet-cli/
+parakeet-server/
