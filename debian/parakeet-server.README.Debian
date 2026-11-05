@@ -1,0 +1,26 @@
+parakeet-server for Debian
+--------------------------
+
+Models are not part of the package. Fetch the ones you want into
+/var/lib/parakeet/models, the model directory compiled into this build:
+
+    sudo parakeet-server --fetch tdt-0.6b-v2-q8_0.gguf
+    sudo parakeet-server --fetch tdt-0.6b-v3-q8_0.gguf
+
+Any file name from https://huggingface.co/mudler/parakeet-cpp-gguf works, as
+do the aliases and URLs described in README.md in this directory.
+
+Set the model to serve, the device and further options in
+/etc/default/parakeet-server, then enable the service:
+
+    sudo systemctl enable --now parakeet-server
+
+A request may select any other fetched model by file name:
+
+    curl -F file=@audio.wav -F model=tdt-0.6b-v3-q8_0.gguf \
+        http://127.0.0.1:8080/v1/audio/transcriptions
+
+The service runs as a dynamic user in the render and video groups, so
+PARAKEET_DEVICE=Vulkan0 in /etc/default/parakeet-server can use the GPU.
+
+ -- Ronny Rentner <debian@ronny-rentner.de>  Thu, 05 Nov 2026 15:30:00 +0100

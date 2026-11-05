@@ -1,6 +1,9 @@
-parakeet-cpp (0.6.1+git20261105.c3489f2-1) forky; urgency=medium
+parakeet-cpp (0.6.1+git20261105.7e6f040-1) forky; urgency=medium
 
-  * Build of the ronny-rentner fork at commit c3489f2: upstream 0.6.1 plus
-    phrase boosting, model selection by file name and idle unloading.
+  * Build of the ronny-rentner fork at commit 7e6f040: upstream 0.6.1 plus
+    phrase boosting, model selection by file name, idle unloading and
+    --fetch for downloading models.
+  * Ship a system service, /etc/default/parakeet-server and README.Debian;
+    models live in /var/lib/parakeet/models.
 
- -- Ronny Rentner <debian@ronny-rentner.de>  Thu, 05 Nov 2026 15:11:54 +0100
+ -- Ronny Rentner <debian@ronny-rentner.de>  Thu, 05 Nov 2026 15:34:43 +0100

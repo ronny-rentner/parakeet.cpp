@@ -1,0 +1,9 @@
+# Model served by default: a file in /var/lib/parakeet/models, fetched once with
+#   sudo parakeet-server --fetch tdt-0.6b-v2-q8_0.gguf
+PARAKEET_MODEL=tdt-0.6b-v2-q8_0.gguf
+
+# Inference device, for example CPU or Vulkan0. Unset: the first GPU, else CPU.
+#PARAKEET_DEVICE=Vulkan0
+
+# Further options, see parakeet-server --help.
+PARAKEET_ARGS=--port 8080

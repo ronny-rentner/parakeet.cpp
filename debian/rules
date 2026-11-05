@@ -12,6 +12,7 @@ override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DPARAKEET_VERSION=$(UPSTREAM_VERSION) \
+		-DPARAKEET_MODEL_DIR=/var/lib/parakeet/models \
 		-DPARAKEET_BUILD_CLI=ON \
 		-DPARAKEET_BUILD_SERVER=ON \
 		-DPARAKEET_BUILD_TESTS=OFF \
@@ -26,3 +27,7 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	install -D -m 755 debian/obj/examples/cli/parakeet-cli debian/parakeet-cli/usr/bin/parakeet-cli
 	install -D -m 755 debian/obj/examples/server/parakeet-server debian/parakeet-server/usr/bin/parakeet-server
+
+# The service cannot run before a model is fetched; see README.Debian.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start

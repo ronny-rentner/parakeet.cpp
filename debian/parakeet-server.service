@@ -1,0 +1,19 @@
+[Unit]
+Description=Parakeet speech recognition server
+After=network.target
+
+[Service]
+EnvironmentFile=-/etc/default/parakeet-server
+ExecStart=/usr/bin/parakeet-server --model ${PARAKEET_MODEL} $PARAKEET_ARGS
+DynamicUser=yes
+# /var/lib/parakeet/models is the model directory compiled into this build.
+StateDirectory=parakeet
+# Mesa keeps its shader cache under XDG_CACHE_HOME; the dynamic user has no home.
+CacheDirectory=parakeet
+Environment=XDG_CACHE_HOME=/var/cache/parakeet
+# Access to the GPU render nodes for PARAKEET_DEVICE=Vulkan0.
+SupplementaryGroups=render video
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
