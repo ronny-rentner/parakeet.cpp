@@ -27,9 +27,9 @@ const std::vector<std::pair<std::string, std::string>>& model_aliases();
 //   - anything else       -> false; err lists known aliases
 bool resolve_model(const std::string& arg, ModelSource& out, std::string& err);
 
-// The default cache directory: $PARAKEET_CACHE_DIR, else
-// ${XDG_CACHE_HOME:-$HOME/.cache}/parakeet.cpp/models.
-std::string default_cache_dir();
+// The default model directory: $PARAKEET_MODEL_DIR, else the compile-time
+// PARAKEET_MODEL_DIR, else ${XDG_CACHE_HOME:-$HOME/.cache}/parakeet.cpp/models.
+std::string default_model_dir();
 
 // Ensure a ModelSource is on disk and return the local path.
 //   kLocalPath: returns value unchanged.
