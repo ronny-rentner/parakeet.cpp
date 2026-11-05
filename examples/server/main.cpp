@@ -61,10 +61,11 @@ void usage() {
     std::fprintf(stderr,
         "usage:\n"
         "  parakeet-server --model <path|url|alias> [--host 127.0.0.1] "
-        "[--port 8080] [--threads N] [--concurrency K] [--model-dir <dir>] [--sound-model <path>] [--unload-after SEC]\n"
+        "[--port 8080] [--threads N] [--concurrency K] [--model-dir <dir>] [--sound-model <path>] [--unload-after SEC] [--fetch-missing]\n"
         "  parakeet-server --fetch <url|alias|name.gguf> [--fetch ...] [--model-dir <dir>]\n"
         "\n"
-        "--fetch downloads each model into the cache directory and exits without serving.\n"
+        "--fetch downloads each model into the model directory and exits without serving.\n"
+        "A --model given as URL, alias or name.gguf must already be in the model directory unless --fetch-missing is set.\n"
         "Serves POST /v1/audio/transcriptions (OpenAI-compatible). A request may name another GGUF\n"
         "from the --model directory; models unused for --unload-after seconds are unloaded (default 300, 0 keeps them).\n"
         "--concurrency K runs up to K transcriptions at once on K CPU backends "
@@ -80,6 +81,7 @@ int main(int argc, char** argv) {
     std::string model_arg, host = "127.0.0.1", model_dir, sound_model;
     std::vector<std::string> fetch;
     int port = 8080, threads = 0, concurrency = 1, unload_after = 300;
+    bool fetch_missing = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -96,6 +98,7 @@ int main(int argc, char** argv) {
         else if (a == "--sound-model") sound_model = next("--sound-model");
         else if (a == "--unload-after") unload_after = std::atoi(next("--unload-after").c_str());
         else if (a == "--fetch")   fetch.push_back(next("--fetch"));
+        else if (a == "--fetch-missing") fetch_missing = true;
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else if (a == "--version" || a == "-V") {
             std::printf("parakeet-server %s\n", parakeet_version());
@@ -134,7 +137,7 @@ int main(int argc, char** argv) {
     try {
         if (src.kind == pkserver::ModelSource::kUrl)
             std::fprintf(stderr, "parakeet-server: fetching %s\n", src.value.c_str());
-        model_path = pkserver::fetch_model(src, model_dir);
+        model_path = pkserver::fetch_model(src, model_dir, fetch_missing);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "parakeet-server: %s\n", e.what());
         return 1;

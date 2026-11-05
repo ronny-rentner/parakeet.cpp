@@ -33,8 +33,9 @@ std::string default_model_dir();
 
 // Ensure a ModelSource is on disk and return the local path.
 //   kLocalPath: returns value unchanged.
-//   kUrl: downloads to <cache_dir>/<cache_name> via curl (skips if present).
+//   kUrl: downloads to <cache_dir>/<cache_name> via curl (skips if present);
+//         a missing file is an error unless fetch_missing is set.
 // Throws std::runtime_error on failure (download error, no curl/wget, etc.).
-std::string fetch_model(const ModelSource& src, const std::string& cache_dir);
+std::string fetch_model(const ModelSource& src, const std::string& cache_dir, bool fetch_missing = true);
 
 } // namespace pkserver

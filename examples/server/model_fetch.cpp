@@ -158,12 +158,13 @@ static int run_argv(const std::vector<std::string>& args) {
 #endif
 }
 
-std::string fetch_model(const ModelSource& src, const std::string& cache_dir) {
+std::string fetch_model(const ModelSource& src, const std::string& cache_dir, bool fetch_missing) {
     if (src.kind == ModelSource::kLocalPath) return src.value;
 
     fs::create_directories(cache_dir);
     fs::path final_path = fs::path(cache_dir) / src.cache_name;
     if (fs::exists(final_path)) return final_path.string();
+    if (!fetch_missing) throw std::runtime_error("model file does not exist: " + final_path.string());
 
     fs::path part = final_path;
     part += ".part";
