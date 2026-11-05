@@ -112,12 +112,10 @@ public:
     // per-token timestamps + confidence (matching NeMo timestamps=True +
     // 'max_prob' confidence). If `sample_rate != 16000` the audio is linearly
     // resampled to 16 kHz first. Throws std::runtime_error on failure.
-    // TDT `prefix_tokens` supplies fixed text history; results contain only new tokens.
     Transcription transcribe_with_timestamps(
         const std::vector<float>& pcm, int sample_rate,
         Decoder decoder = Decoder::kDefault,
-        const std::string& target_lang = "", const PhraseBoost* boost = nullptr,
-        const std::vector<int32_t>& prefix_tokens = {}) const;
+        const std::string& target_lang = "", const PhraseBoost* boost = nullptr) const;
 
     // Convenience: transcribe a WAV file with timestamps + confidence.
     Transcription transcribe_path_with_timestamps(
@@ -229,8 +227,7 @@ private:
     // two timestamp entry points.
     Transcription transcribe_16k_with_timestamps(
         const std::vector<float>& pcm16k, Decoder decoder,
-        const std::string& target_lang = "", const PhraseBoost* boost = nullptr,
-        const std::vector<int32_t>& prefix_tokens = {}) const;
+        const std::string& target_lang = "", const PhraseBoost* boost = nullptr) const;
 
     // VAD path: encode each 16 kHz clip on its own, decode them in groups of up
     // to kVadDecodeGroup with the exact batched decode (TDT and RNNT; CTC decodes

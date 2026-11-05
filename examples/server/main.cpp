@@ -11,14 +11,11 @@
 #include "sound_stream.hpp"   // pk::SoundStream, pk::SoundSegment
 #include "audio_io.hpp"       // pk::resample_linear
 #include "phrase_boost.hpp"
-#include <nlohmann/json.hpp>
-#include <sentencepiece_processor.h>
 
 #include <charconv>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
-#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -136,7 +133,6 @@ int main(int argc, char** argv) {
     const bool pooled = concurrency > 1;
     // Reuse models held by active requests without keeping them loaded afterward.
     std::map<std::string, std::weak_ptr<pk::Model>> models;
-    std::map<std::string, std::unique_ptr<sentencepiece::SentencePieceProcessor>> tokenizers;
     std::shared_ptr<pk::Model> last_used_model = std::move(model);
     models.emplace(model_path, last_used_model);
     std::mutex models_mu;
@@ -180,12 +176,10 @@ int main(int argc, char** argv) {
         if (!req.has_file("file")) { fail(400, "missing required field 'file'"); return; }
 
         std::shared_ptr<pk::Model> model;
-        std::vector<int32_t> prefix_tokens;
         {
             std::lock_guard<std::mutex> lock(models_mu);
             for (auto it = models.begin(); it != models.end();) {
                 if (it->second.expired()) {
-                    tokenizers.erase(it->first);
                     it = models.erase(it);
                 } else {
                     ++it;
@@ -215,34 +209,6 @@ int main(int argc, char** argv) {
                 models[path] = model;
                 std::fprintf(stderr, "parakeet-server: loaded model %s\n", path.c_str());
             }
-            if (req.has_file("prefix") && !req.get_file_value("prefix").content.empty()) {
-                if (model->config().tdt_durations.empty()) {
-                    fail(400, "text prefix requires a TDT model");
-                    return;
-                }
-                auto tokenizer = tokenizers.find(path);
-                if (tokenizer == tokenizers.end()) {
-                    auto loaded = std::make_unique<sentencepiece::SentencePieceProcessor>();
-                    // Each GGUF uses its own matching SentencePiece model beside it.
-                    const std::string tokenizer_path = std::filesystem::path(path).replace_extension(".tokenizer.model").string();
-                    const auto status = loaded->Load(tokenizer_path);
-                    if (!status.ok()) {
-                        fail(400, "could not load prefix tokenizer " + tokenizer_path + ": " + status.ToString());
-                        return;
-                    }
-                    const auto& pieces = model->loader().tokenizer_pieces();
-                    bool matches = loaded->GetPieceSize() == (int)pieces.size();
-                    for (size_t i = 0; matches && i < pieces.size(); ++i)
-                        matches = loaded->IdToPiece((int)i) == pieces[i];
-                    if (!matches) {
-                        fail(400, "prefix tokenizer vocabulary does not match " + path);
-                        return;
-                    }
-                    tokenizer = tokenizers.emplace(path, std::move(loaded)).first;
-                }
-                const auto status = tokenizer->second->Encode(req.get_file_value("prefix").content, &prefix_tokens);
-                if (!status.ok()) { fail(400, status.ToString()); return; }
-            }
         }
 
         // response_format (default json)
@@ -270,22 +236,16 @@ int main(int argc, char** argv) {
                 fail(400, "boost_phrases cannot be combined with boost_phrase or boost_score");
                 return;
             }
-            try {
-                const auto phrases = nlohmann::json::parse(req.get_file_value("boost_phrases").content);
-                if (!phrases.is_object()) {
-                    fail(400, "boost_phrases must be a JSON object mapping phrases to numeric strengths");
+            httplib::Params phrases;
+            httplib::detail::parse_query_text(req.get_file_value("boost_phrases").content, phrases);
+            for (const auto& [phrase, value] : phrases) {
+                float score;
+                const auto parsed = std::from_chars(value.data(), value.data() + value.size(), score);
+                if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+                    fail(400, "phrase strengths must be numbers");
                     return;
                 }
-                for (const auto& item : phrases.items()) {
-                    if (!item.value().is_number()) {
-                        fail(400, "phrase strengths must be numbers");
-                        return;
-                    }
-                    boost_phrases.emplace_back(item.key(), item.value().get<float>());
-                }
-            } catch (const nlohmann::json::exception&) {
-                fail(400, "invalid boost_phrases JSON");
-                return;
+                boost_phrases.emplace_back(phrase, score);
             }
         }
         std::unique_ptr<pk::PhraseBoost> boost;
@@ -332,7 +292,7 @@ int main(int argc, char** argv) {
                     std::lock_guard<std::mutex> lock(models_mu);
                     last_used_model = model;
                 }
-                tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get(), prefix_tokens);
+                tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get());
 
                 // Sound tagging is verbose_json-only so json/text requests never
                 // pay for it. Runs under the same lock as ASR: the tagger is not

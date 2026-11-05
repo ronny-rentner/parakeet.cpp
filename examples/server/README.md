@@ -16,8 +16,6 @@ surface, auth, and metrics.
 
 Built by default with the rest of the project (`PARAKEET_BUILD_SERVER=ON`):
 
-The experimental phrase-boosting API requires `nlohmann-json3-dev` on Debian.
-
 ```sh
 cmake -B build && cmake --build build --target parakeet-server -j
 ```
@@ -128,8 +126,8 @@ fetcher used by `--model`.
   applied before token normalization, so this is contextual logit biasing,
   not an external language model. Boosted requests support `json` or `text`.
 - `timestamp_granularities[]=word` adds a `words` array to `verbose_json`.
-- `boost_phrases`: JSON object mapping each word or phrase to its own non-negative
-  strength, for example `{"symlink":6,"home dir":4,"grammar":3}`. Use this field
+- `boost_phrases`: URL-encoded pairs mapping each word or phrase to its own non-negative
+  strength, for example `symlink=6&home+dir=4&grammar=3`. Use this field
   instead of `boost_phrase` and `boost_score`; combining them returns an error.
   Matching and score application follow the same rules as shared-strength boosting.
   Matches ending at the same boundary use the strongest completed bonus.

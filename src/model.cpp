@@ -681,8 +681,7 @@ std::vector<std::string> Model::transcribe_pcm_batch(
 static Transcription decode_enc_out_with_timestamps(
         const ModelLoader& loader, const PredictionNet* dpred, const Joint* djoint,
         const std::vector<float>& enc_out,
-        int d_model, int Tout, bool use_tdt, float frame_sec, const PhraseBoost* boost = nullptr,
-        const std::vector<int32_t>& prefix_tokens = {}) {
+        int d_model, int Tout, bool use_tdt, float frame_sec, const PhraseBoost* boost = nullptr) {
     const ParakeetConfig& cfg = loader.config();
     Transcription result;
     std::vector<TokenInfo> toks;
@@ -696,7 +695,7 @@ static Transcription decode_enc_out_with_timestamps(
         const int max_symbols = (int)cfg.max_symbols;
         if (!cfg.tdt_durations.empty())
             tdt_greedy(pred, joint, enc_row, Tout, d_model, cfg.tdt_durations,
-                       (int)cfg.blank_id, max_symbols, &toks, boost, prefix_tokens);
+                       (int)cfg.blank_id, max_symbols, &toks, boost);
         else
             rnnt_greedy(pred, joint, enc_row, Tout, d_model,
                         (int)cfg.blank_id, max_symbols, &toks);
@@ -725,8 +724,7 @@ static Transcription decode_enc_out_with_timestamps(
 
 Transcription Model::transcribe_16k_with_timestamps(
     const std::vector<float>& pcm16k, Decoder decoder,
-    const std::string& target_lang, const PhraseBoost* boost,
-    const std::vector<int32_t>& prefix_tokens) const {
+    const std::string& target_lang, const PhraseBoost* boost) const {
     PoolLease lease(pool_snapshot());
     const ParakeetConfig& cfg = loader_.config();
     const int prompt_index = resolve_prompt_index(target_lang);
@@ -740,13 +738,11 @@ Transcription Model::transcribe_16k_with_timestamps(
 
     const bool use_tdt = (decoder == Decoder::kTDT)
         || (decoder == Decoder::kDefault && arch_prefers_tdt(cfg.arch));
-    if (!prefix_tokens.empty() && (!use_tdt || cfg.tdt_durations.empty()))
-        throw std::invalid_argument("text prefix requires a TDT decoder");
 
     Transcription result = decode_enc_out_with_timestamps(
         loader_, use_tdt ? &decoder_objects().pred : nullptr,
         use_tdt ? &decoder_objects().joint : nullptr, encoded.channels_first, encoded.d_model, encoded.frames,
-        use_tdt, frame_sec, boost, prefix_tokens);
+        use_tdt, frame_sec, boost);
     return result;
 }
 
@@ -998,16 +994,15 @@ std::string Model::transcribe_path(const std::string& wav_path,
 
 Transcription Model::transcribe_with_timestamps(
     const std::vector<float>& pcm, int sample_rate, Decoder decoder,
-    const std::string& target_lang, const PhraseBoost* boost,
-    const std::vector<int32_t>& prefix_tokens) const {
+    const std::string& target_lang, const PhraseBoost* boost) const {
     if (sample_rate <= 0) {
         throw std::runtime_error("parakeet: invalid sample_rate");
     }
     if (sample_rate == 16000) {
-        return transcribe_16k_with_timestamps(pcm, decoder, target_lang, boost, prefix_tokens);
+        return transcribe_16k_with_timestamps(pcm, decoder, target_lang, boost);
     }
     std::vector<float> pcm16k = resample_linear(pcm, sample_rate, 16000);
-    return transcribe_16k_with_timestamps(pcm16k, decoder, target_lang, boost, prefix_tokens);
+    return transcribe_16k_with_timestamps(pcm16k, decoder, target_lang, boost);
 }
 
 Transcription Model::transcribe_path_with_timestamps(

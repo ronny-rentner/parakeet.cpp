@@ -13,8 +13,7 @@ std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
                                 const std::vector<float>& enc, int T, int enc_hidden,
                                 const std::vector<int32_t>& durations,
                                 int blank_id, int max_symbols,
-                                std::vector<TokenInfo>* tokens, const PhraseBoost* boost,
-                                const std::vector<int32_t>& prefix_tokens) {
+                                std::vector<TokenInfo>* tokens, const PhraseBoost* boost) {
     assert((int)enc.size() == (size_t)T * enc_hidden);
     assert(!durations.empty());
 
@@ -46,16 +45,6 @@ std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
     std::vector<float> g;
     PredState out_state;
     std::vector<float> logits;
-
-    // Leave the last prefix token for the first audio step, as after a normal emit.
-    for (int32_t token : prefix_tokens) {
-        if (token < 0 || token >= blank_id)
-            throw std::invalid_argument("tdt_greedy: prefix token outside vocabulary");
-        pred.step(emitted_any ? last_token : blank_id, !emitted_any, committed, g, out_state);
-        committed = std::move(out_state);
-        last_token = token;
-        emitted_any = true;
-    }
 
     // Prediction-net output cache: `g`/`out_state` depend only on the committed
     // (last_token, lstm_state), which change exclusively on an emit (k != blank).
@@ -178,8 +167,6 @@ struct BeamState {
     int32_t last_token = -1;
     bool emitted_any = false;
     bool pred_valid = false;
-    // Each candidate advances the existing phrase matcher through its own tokens.
-    int boost_state = 0;
 };
 
 struct RankedIndex {
@@ -257,9 +244,8 @@ void merge_duplicate_hypotheses(std::vector<BeamState>& hypotheses) {
 }
 
 float sort_score(const BeamState& hyp, bool score_norm) {
-    const float score = hyp.hyp.score + hyp.hyp.context_score;
-    if (!score_norm) return score;
-    return score / (float)(hyp.hyp.tokens.size() + 1);
+    if (!score_norm) return hyp.hyp.score;
+    return hyp.hyp.score / (float)(hyp.hyp.tokens.size() + 1);
 }
 
 } // namespace
@@ -268,8 +254,7 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
     const PredictionNet& pred, const Joint& joint,
     const std::vector<float>& enc, int T, int enc_hidden,
     const std::vector<int32_t>& durations, int blank_id,
-    int beam_size, int nbest, bool score_norm, const PhraseBoost* boost,
-    const TdtContextScorer& context_scorer) {
+    int beam_size, int nbest, bool score_norm) {
     if (T < 0 || enc_hidden <= 0 ||
         enc.size() != (size_t)T * (size_t)enc_hidden)
         throw std::invalid_argument("tdt_beam_search: invalid encoder shape");
@@ -320,7 +305,6 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
 
     BeamState start;
     start.dec_state = pred.zero_state();
-    if (boost) start.boost_state = boost->initial_state();
     std::vector<BeamState> kept_hyps;
     kept_hyps.push_back(std::move(start));
 
@@ -342,7 +326,7 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
             auto best_it = std::max_element(
                 current_hyps.begin(), current_hyps.end(),
                 [](const BeamState& a, const BeamState& b) {
-                    return sort_score(a, false) < sort_score(b, false);
+                    return a.hyp.score < b.hyp.score;
                 });
             BeamState best = std::move(*best_it);
             current_hyps.erase(best_it);
@@ -358,7 +342,6 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
             joint.step_logits(
                 enc_proj.data() + (size_t)time_idx * joint_hidden,
                 best.pred_out.data(), (int)best.pred_out.size(), logits);
-            if (boost) boost->apply(logits, best.boost_state);
             std::vector<float> token_logp =
                 log_softmax(logits.data(), token_count);
             std::vector<float> duration_logp =
@@ -416,7 +399,6 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
                     (int32_t)pair.token, (int32_t)time_idx, (int32_t)duration});
                 child.dec_state = best.next_state;
                 child.last_token = (int32_t)pair.token;
-                if (boost) child.boost_state = boost->advance(best.boost_state, pair.token);
                 child.emitted_any = true;
                 child.pred_valid = false;
                 child.last_frame += duration;
@@ -443,21 +425,21 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
 
             merge_duplicate_hypotheses(kept_hyps);
             if (!current_hyps.empty()) {
-                const float next_score = sort_score(*std::max_element(
+                const float next_score = std::max_element(
                     current_hyps.begin(), current_hyps.end(),
                     [](const BeamState& a, const BeamState& b) {
-                        return sort_score(a, false) < sort_score(b, false);
-                    }), false);
+                        return a.hyp.score < b.hyp.score;
+                    })->hyp.score;
                 const int more_probable_count = (int)std::count_if(
                     kept_hyps.begin(), kept_hyps.end(),
                     [next_score](const BeamState& hyp) {
-                        return sort_score(hyp, false) > next_score;
+                        return hyp.hyp.score > next_score;
                     });
                 if (more_probable_count >= beam) {
                     std::vector<BeamState> more_probable;
                     more_probable.reserve(more_probable_count);
                     for (BeamState& hyp : kept_hyps)
-                        if (sort_score(hyp, false) > next_score)
+                        if (hyp.hyp.score > next_score)
                             more_probable.push_back(std::move(hyp));
                     kept_hyps.swap(more_probable);
                     break;
@@ -465,27 +447,10 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
             } else {
                 std::sort(kept_hyps.begin(), kept_hyps.end(),
                           [](const BeamState& a, const BeamState& b) {
-                              return sort_score(a, false) > sort_score(b, false);
+                              return a.hyp.score > b.hyp.score;
                           });
                 if ((int)kept_hyps.size() > beam)
                     kept_hyps.resize(beam);
-            }
-        }
-        if (context_scorer) {
-            // Delayed fusion updates surviving paths after pruning each frame.
-            std::vector<std::vector<int32_t>> sequences;
-            for (const auto& state : kept_hyps) {
-                std::vector<int32_t> ids;
-                for (const auto& token : state.hyp.tokens) ids.push_back(token.id);
-                sequences.push_back(std::move(ids));
-            }
-            const auto scores = context_scorer(sequences, time_idx == T - 1);
-            if (scores.size() != kept_hyps.size())
-                throw std::runtime_error("context scorer returned the wrong number of scores");
-            for (size_t i = 0; i < kept_hyps.size(); ++i) {
-                if (!std::isfinite(scores[i]))
-                    throw std::runtime_error("context scorer returned a non-finite score");
-                kept_hyps[i].hyp.context_score = scores[i];
             }
         }
     }
@@ -498,7 +463,9 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
     std::vector<TdtBeamHypothesis> result;
     result.reserve(count);
     for (int i = 0; i < count; ++i) {
-        kept_hyps[i].hyp.normalized_score = sort_score(kept_hyps[i], true);
+        kept_hyps[i].hyp.normalized_score =
+            kept_hyps[i].hyp.score /
+            (float)(kept_hyps[i].hyp.tokens.size() + 1);
         result.push_back(std::move(kept_hyps[i].hyp));
     }
     return result;
