@@ -98,6 +98,7 @@ bool resolve_model(const std::string& arg, ModelSource& out, std::string& err) {
 
 std::string default_model_dir() {
     if (const char* c = std::getenv("PARAKEET_MODEL_DIR"); c && *c) return c;
+    if (const char* c = std::getenv("PARAKEET_CACHE_DIR"); c && *c) return c;
 #ifdef PARAKEET_MODEL_DIR
     return PARAKEET_MODEL_DIR;
 #endif

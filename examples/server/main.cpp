@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
         else if (a == "--port")    port = std::atoi(next("--port").c_str());
         else if (a == "--threads") threads = std::atoi(next("--threads").c_str());
         else if (a == "--concurrency") concurrency = std::atoi(next("--concurrency").c_str());
-        else if (a == "--model-dir") model_dir = next("--model-dir");
+        else if (a == "--model-dir" || a == "--cache-dir") model_dir = next(a.c_str());
         else if (a == "--sound-model") sound_model = next("--sound-model");
         else if (a == "--unload-after") unload_after = std::atoi(next("--unload-after").c_str());
         else if (a == "--fetch")   fetch.push_back(next("--fetch"));
