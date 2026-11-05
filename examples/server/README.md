@@ -4,7 +4,7 @@ A small OpenAI-drop-in HTTP server for transcription, built on parakeet.cpp.
 Point any OpenAI client's `base_url` at it and call
 `POST /v1/audio/transcriptions`.
 
-This is an example, not a production service. It keeps requested models loaded,
+This is an example, not a production service. It keeps the last used model loaded,
 runs one transcription at a time by default, and accepts WAV uploads only.
 
 For a production deployment, use [LocalAI](https://localai.io), which embeds
@@ -112,8 +112,10 @@ fetcher used by `--model`.
 ## Supported
 
 - `model`: a path, URL, or alias, using the same resolver as `--model`. The first
-  request loads it; later requests reuse it. Models remain loaded until the
-  server exits. Omitted, empty, or `parakeet` selects the startup model.
+  request loads it; later requests reuse it while it remains loaded. The last
+  model used for inference stays loaded; other models are released when their
+  active requests finish. Invalid requests do not replace the retained model.
+  Omitted, empty, or `parakeet` selects the startup model.
   Loading is serialized; an already-running transcription can continue during
   loading, but new requests wait for the load to finish.
 - `response_format`: `json` (default), `text`, `verbose_json`.

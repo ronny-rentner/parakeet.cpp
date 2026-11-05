@@ -4,6 +4,7 @@
 #include "decode_types.hpp"
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 namespace pk {
 
@@ -21,14 +22,18 @@ struct TdtBeamToken {
 
 // One completed TDT beam-search hypothesis.
 //
-// `score` is the accumulated token+duration log probability. NeMo's default
-// score normalization divides by the sequence length INCLUDING its leading
+// `score` is the accumulated token+duration log probability. `normalized_score`
+// divides score + context_score by sequence length INCLUDING NeMo's leading
 // blank/SOS sentinel, hence tokens.size() + 1 here.
 struct TdtBeamHypothesis {
     std::vector<TdtBeamToken> tokens;
     float score = 0.0f;
     float normalized_score = 0.0f;
+    float context_score = 0.0f;
 };
+
+// Cumulative text-context scores for each hypothesis; final allows scoring its last word.
+using TdtContextScorer = std::function<std::vector<float>(const std::vector<std::vector<int32_t>>&, bool final)>;
 
 // TDT (Token-and-Duration Transducer) duration-aware greedy decoding.
 //
@@ -76,12 +81,15 @@ struct TdtBeamHypothesis {
 // the token slice logits[0:vocab+1] (excluding the TDT duration logits), span =
 // durations[d_k] (the predicted duration applied to the token). The id-only path
 // (tokens == nullptr) is unchanged.
+// `prefix_tokens` primes the prediction net without consuming encoder frames.
+// Prefix tokens are excluded from both the returned ids and token metadata.
 std::vector<int32_t> tdt_greedy(const PredictionNet& pred, const Joint& joint,
                                 const std::vector<float>& enc, int T, int enc_hidden,
                                 const std::vector<int32_t>& durations,
                                 int blank_id, int max_symbols,
                                 std::vector<TokenInfo>* tokens = nullptr,
-                                const PhraseBoost* boost = nullptr);
+                                const PhraseBoost* boost = nullptr,
+                                const std::vector<int32_t>& prefix_tokens = {});
 
 // Sequence-level beam search for TDT models, matching NeMo BeamTDTInfer's
 // `default_beam_search`:
@@ -103,7 +111,9 @@ std::vector<TdtBeamHypothesis> tdt_beam_search(
     const PredictionNet& pred, const Joint& joint,
     const std::vector<float>& enc, int T, int enc_hidden,
     const std::vector<int32_t>& durations, int blank_id,
-    int beam_size, int nbest, bool score_norm = true);
+    int beam_size, int nbest, bool score_norm = true,
+    const PhraseBoost* boost = nullptr,
+    const TdtContextScorer& context_scorer = {});
 
 namespace detail {
 

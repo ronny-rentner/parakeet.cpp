@@ -180,6 +180,10 @@ set_tests_properties(test_server_resolve PROPERTIES SKIP_RETURN_CODE 77)
 # Opt-in end-to-end test: drives the real parakeet-server binary, downloading
 # the model via its alias. Skips (77) unless PARAKEET_SERVER_E2E=1.
 if(TARGET parakeet-server)
+  find_package(nlohmann_json REQUIRED)
+  pk_add_test(test_tdt_prefix)
+  target_link_libraries(test_tdt_prefix PRIVATE nlohmann_json::nlohmann_json)
+  set_tests_properties(test_tdt_prefix PROPERTIES LABELS "model")
   add_test(NAME server_e2e
            COMMAND ${CMAKE_SOURCE_DIR}/tests/server_e2e.sh $<TARGET_FILE:parakeet-server>
            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

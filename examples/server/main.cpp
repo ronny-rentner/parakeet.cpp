@@ -12,11 +12,13 @@
 #include "audio_io.hpp"       // pk::resample_linear
 #include "phrase_boost.hpp"
 #include <nlohmann/json.hpp>
+#include <sentencepiece_processor.h>
 
 #include <charconv>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -59,7 +61,7 @@ void usage() {
         "  parakeet-server --model <path|url|alias> [--host 127.0.0.1] "
         "[--port 8080] [--threads N] [--concurrency K] [--cache-dir <dir>] [--sound-model <path>]\n"
         "\n"
-        "Serves POST /v1/audio/transcriptions (OpenAI-compatible); requested models stay loaded.\n"
+        "Serves POST /v1/audio/transcriptions (OpenAI-compatible); keeps the last used model loaded.\n"
         "--concurrency K runs up to K transcriptions at once on K CPU backends "
         "(default 1); --threads is then the thread count of each backend, and "
         "K x threads should not exceed the physical cores.\n"
@@ -132,8 +134,11 @@ int main(int argc, char** argv) {
         concurrency = eff;
     }
     const bool pooled = concurrency > 1;
-    std::map<std::string, std::unique_ptr<pk::Model>> models;
-    models.emplace(model_path, std::move(model));
+    // Reuse models held by active requests without keeping them loaded afterward.
+    std::map<std::string, std::weak_ptr<pk::Model>> models;
+    std::map<std::string, std::unique_ptr<sentencepiece::SentencePieceProcessor>> tokenizers;
+    std::shared_ptr<pk::Model> last_used_model = std::move(model);
+    models.emplace(model_path, last_used_model);
     std::mutex models_mu;
 
     // --sound-model is a local path only; it does not go through the ASR
@@ -174,9 +179,18 @@ int main(int argc, char** argv) {
 
         if (!req.has_file("file")) { fail(400, "missing required field 'file'"); return; }
 
-        pk::Model* model;
+        std::shared_ptr<pk::Model> model;
+        std::vector<int32_t> prefix_tokens;
         {
             std::lock_guard<std::mutex> lock(models_mu);
+            for (auto it = models.begin(); it != models.end();) {
+                if (it->second.expired()) {
+                    tokenizers.erase(it->first);
+                    it = models.erase(it);
+                } else {
+                    ++it;
+                }
+            }
             std::string path = model_path;
             if (req.has_file("model")) {
                 const std::string& requested = req.get_file_value("model").content;
@@ -193,15 +207,42 @@ int main(int argc, char** argv) {
                 }
             }
             auto found = models.find(path);
-            if (found == models.end()) {
-                auto loaded = pk::Model::load(path);
-                if (!loaded) { fail(500, "failed to load model " + path); return; }
-                if (pooled) loaded->set_concurrency(concurrency, threads);
-                found = models.emplace(path, std::move(loaded)).first;
+            if (found != models.end()) model = found->second.lock();
+            if (!model) {
+                model = pk::Model::load(path);
+                if (!model) { fail(500, "failed to load model " + path); return; }
+                if (pooled) model->set_concurrency(concurrency, threads);
+                models[path] = model;
                 std::fprintf(stderr, "parakeet-server: loaded model %s\n", path.c_str());
             }
-            // Models stay loaded until the HTTP workers have stopped.
-            model = found->second.get();
+            if (req.has_file("prefix") && !req.get_file_value("prefix").content.empty()) {
+                if (model->config().tdt_durations.empty()) {
+                    fail(400, "text prefix requires a TDT model");
+                    return;
+                }
+                auto tokenizer = tokenizers.find(path);
+                if (tokenizer == tokenizers.end()) {
+                    auto loaded = std::make_unique<sentencepiece::SentencePieceProcessor>();
+                    // Each GGUF uses its own matching SentencePiece model beside it.
+                    const std::string tokenizer_path = std::filesystem::path(path).replace_extension(".tokenizer.model").string();
+                    const auto status = loaded->Load(tokenizer_path);
+                    if (!status.ok()) {
+                        fail(400, "could not load prefix tokenizer " + tokenizer_path + ": " + status.ToString());
+                        return;
+                    }
+                    const auto& pieces = model->loader().tokenizer_pieces();
+                    bool matches = loaded->GetPieceSize() == (int)pieces.size();
+                    for (size_t i = 0; matches && i < pieces.size(); ++i)
+                        matches = loaded->IdToPiece((int)i) == pieces[i];
+                    if (!matches) {
+                        fail(400, "prefix tokenizer vocabulary does not match " + path);
+                        return;
+                    }
+                    tokenizer = tokenizers.emplace(path, std::move(loaded)).first;
+                }
+                const auto status = tokenizer->second->Encode(req.get_file_value("prefix").content, &prefix_tokens);
+                if (!status.ok()) { fail(400, status.ToString()); return; }
+            }
         }
 
         // response_format (default json)
@@ -285,7 +326,13 @@ int main(int argc, char** argv) {
                 // the tagger (not thread-safe) takes the lock.
                 std::unique_lock<std::mutex> lock(infer_mu, std::defer_lock);
                 if (!pooled) lock.lock();
-                tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get());
+                {
+                    // Retain the last model actually used for inference; requests
+                    // keep older models alive only until they finish using them.
+                    std::lock_guard<std::mutex> lock(models_mu);
+                    last_used_model = model;
+                }
+                tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get(), prefix_tokens);
 
                 // Sound tagging is verbose_json-only so json/text requests never
                 // pay for it. Runs under the same lock as ASR: the tagger is not
@@ -329,6 +376,7 @@ int main(int argc, char** argv) {
     bool ok = svr.listen(host.c_str(), port);
     g_server = nullptr;
     models.clear();
+    last_used_model.reset();
     pk::shutdown_backend();
     if (!ok) {
         std::fprintf(stderr, "parakeet-server: failed to bind %s:%d\n", host.c_str(), port);
