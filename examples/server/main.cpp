@@ -13,14 +13,18 @@
 #include "phrase_boost.hpp"
 
 #include <charconv>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -57,9 +61,10 @@ void usage() {
     std::fprintf(stderr,
         "usage:\n"
         "  parakeet-server --model <path|url|alias> [--host 127.0.0.1] "
-        "[--port 8080] [--threads N] [--concurrency K] [--cache-dir <dir>] [--sound-model <path>]\n"
+        "[--port 8080] [--threads N] [--concurrency K] [--cache-dir <dir>] [--sound-model <path>] [--unload-after SEC]\n"
         "\n"
-        "Serves POST /v1/audio/transcriptions (OpenAI-compatible); keeps the last used model loaded.\n"
+        "Serves POST /v1/audio/transcriptions (OpenAI-compatible). A request may name another GGUF\n"
+        "from the --model directory; models unused for --unload-after seconds are unloaded (default 300, 0 keeps them).\n"
         "--concurrency K runs up to K transcriptions at once on K CPU backends "
         "(default 1); --threads is then the thread count of each backend, and "
         "K x threads should not exceed the physical cores.\n"
@@ -71,7 +76,7 @@ void usage() {
 
 int main(int argc, char** argv) {
     std::string model_arg, host = "127.0.0.1", cache_dir, sound_model;
-    int port = 8080, threads = 0, concurrency = 1;
+    int port = 8080, threads = 0, concurrency = 1, unload_after = 300;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -86,6 +91,7 @@ int main(int argc, char** argv) {
         else if (a == "--concurrency") concurrency = std::atoi(next("--concurrency").c_str());
         else if (a == "--cache-dir") cache_dir = next("--cache-dir");
         else if (a == "--sound-model") sound_model = next("--sound-model");
+        else if (a == "--unload-after") unload_after = std::atoi(next("--unload-after").c_str());
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else if (a == "--version" || a == "-V") {
             std::printf("parakeet-server %s\n", parakeet_version());
@@ -132,11 +138,32 @@ int main(int argc, char** argv) {
         concurrency = eff;
     }
     const bool pooled = concurrency > 1;
-    // Reuse models held by active requests without keeping them loaded afterward.
-    std::map<std::string, std::weak_ptr<pk::Model>> models;
-    std::shared_ptr<pk::Model> last_used_model = std::move(model);
-    models.emplace(model_path, last_used_model);
+    // Loaded models stay until idle for --unload-after seconds; `last_used` is stamped at inference.
+    struct LoadedModel {
+        std::shared_ptr<pk::Model> model;
+        std::chrono::steady_clock::time_point last_used;
+    };
+    std::map<std::string, LoadedModel> models;
+    models.emplace(model_path, LoadedModel{std::move(model), std::chrono::steady_clock::now()});
     std::mutex models_mu;
+    std::condition_variable models_cv;
+    bool stopping = false;
+    std::thread unloader;
+    if (unload_after > 0) unloader = std::thread([&] {
+        std::unique_lock<std::mutex> lock(models_mu);
+        while (!models_cv.wait_for(lock, std::chrono::seconds(10), [&] { return stopping; })) {
+            const auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(unload_after);
+            for (auto it = models.begin(); it != models.end();) {
+                // A request holding its own shared_ptr keeps use_count above one while it runs.
+                if (it->second.last_used < cutoff && it->second.model.use_count() == 1) {
+                    std::fprintf(stderr, "parakeet-server: unloaded idle model %s\n", it->first.c_str());
+                    it = models.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    });
 
     // --sound-model is a local path only; it does not go through the ASR
     // model's alias/URL resolver.
@@ -177,39 +204,31 @@ int main(int argc, char** argv) {
         if (!req.has_file("file")) { fail(400, "missing required field 'file'"); return; }
 
         std::shared_ptr<pk::Model> model;
+        std::string path = model_path;
         {
             std::lock_guard<std::mutex> lock(models_mu);
-            for (auto it = models.begin(); it != models.end();) {
-                if (it->second.expired()) {
-                    it = models.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-            std::string path = model_path;
-            if (req.has_file("model")) {
+            if (req.has_file("model") && !req.get_file_value("model").content.empty()) {
+                // A bare file name in the directory of the --model file; paths and URLs are refused.
                 const std::string& requested = req.get_file_value("model").content;
-                if (!requested.empty() && requested != "parakeet" && requested != model_arg) {
-                    ModelSource source;
-                    std::string error;
-                    if (!resolve_model(requested, source, error)) { fail(400, error); return; }
-                    try {
-                        path = fetch_model(source, cache_dir);
-                    } catch (const std::exception& e) {
-                        fail(500, e.what());
-                        return;
-                    }
+                if (requested.find('/') != std::string::npos) {
+                    fail(400, "model must be a file name, not a path: " + requested);
+                    return;
+                }
+                path = (std::filesystem::path(model_path).parent_path() / requested).string();
+                if (!std::filesystem::is_regular_file(path)) {
+                    fail(400, "model file does not exist: " + path);
+                    return;
                 }
             }
             auto found = models.find(path);
-            if (found != models.end()) model = found->second.lock();
-            if (!model) {
-                model = pk::Model::load(path);
-                if (!model) { fail(500, "failed to load model " + path); return; }
-                if (pooled) model->set_concurrency(concurrency, threads);
-                models[path] = model;
+            if (found == models.end()) {
+                std::shared_ptr<pk::Model> loaded = pk::Model::load(path);
+                if (!loaded) { fail(500, "could not load model file: " + path); return; }
+                if (pooled) loaded->set_concurrency(concurrency, threads);
+                found = models.emplace(path, LoadedModel{std::move(loaded), std::chrono::steady_clock::now()}).first;
                 std::fprintf(stderr, "parakeet-server: loaded model %s\n", path.c_str());
             }
+            model = found->second.model;
         }
 
         // response_format (default json)
@@ -280,10 +299,8 @@ int main(int argc, char** argv) {
                 std::unique_lock<std::mutex> lock(infer_mu, std::defer_lock);
                 if (!pooled) lock.lock();
                 {
-                    // Retain the last model actually used for inference; requests
-                    // keep older models alive only until they finish using them.
                     std::lock_guard<std::mutex> lock(models_mu);
-                    last_used_model = model;
+                    models.at(path).last_used = std::chrono::steady_clock::now();
                 }
                 tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get());
 
@@ -328,8 +345,13 @@ int main(int argc, char** argv) {
                  host.c_str(), port, model_path.c_str());
     bool ok = svr.listen(host.c_str(), port);
     g_server = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(models_mu);
+        stopping = true;
+    }
+    models_cv.notify_all();
+    if (unloader.joinable()) unloader.join();
     models.clear();
-    last_used_model.reset();
     pk::shutdown_backend();
     if (!ok) {
         std::fprintf(stderr, "parakeet-server: failed to bind %s:%d\n", host.c_str(), port);

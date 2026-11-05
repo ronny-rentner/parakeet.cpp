@@ -4,8 +4,9 @@ A small OpenAI-drop-in HTTP server for transcription, built on parakeet.cpp.
 Point any OpenAI client's `base_url` at it and call
 `POST /v1/audio/transcriptions`.
 
-This is an example, not a production service. It keeps the last used model loaded,
-runs one transcription at a time by default, and accepts WAV uploads only.
+This is an example, not a production service. It loads models on demand from
+the `--model` directory, runs one transcription at a time by default, and
+accepts WAV uploads only.
 
 For a production deployment, use [LocalAI](https://localai.io), which embeds
 parakeet.cpp as a backend and adds the things this example deliberately leaves
@@ -36,6 +37,11 @@ one. Keep `K x threads` at or below the physical cores. See
 ```sh
 ./build/examples/server/parakeet-server --model path/to/model.gguf --concurrency 4 --threads 2
 ```
+
+A request may name another GGUF from the same directory (see `model` under
+Supported). A model that served no request for `--unload-after` seconds is
+unloaded (default 300, `0` keeps models loaded) and loaded again by the next
+request that names it.
 
 With a published model by alias (downloaded once and cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/parakeet.cpp/models`, override with
@@ -94,7 +100,8 @@ With the OpenAI Python client:
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8080/v1", api_key="not-needed")
 with open("audio.wav", "rb") as f:
-    print(client.audio.transcriptions.create(model="parakeet", file=f).text)
+    # empty model uses the server default; the OpenAI-compatible API requires the model param
+    print(client.audio.transcriptions.create(model="", file=f).text)
 ```
 
 ## Sound events
@@ -109,13 +116,9 @@ fetcher used by `--model`.
 
 ## Supported
 
-- `model`: a path, URL, or alias, using the same resolver as `--model`. The first
-  request loads it; later requests reuse it while it remains loaded. The last
-  model used for inference stays loaded; other models are released when their
-  active requests finish. Invalid requests do not replace the retained model.
-  Omitted, empty, or `parakeet` selects the startup model.
-  Loading is serialized; an already-running transcription can continue during
-  loading, but new requests wait for the load to finish.
+- `model`: optionally override the model for this request with the file name of
+  another GGUF, for example `tdt-0.6b-v3-q8_0.gguf`. Empty uses the server
+  default.
 - `response_format`: `json` (default), `text`, `verbose_json`.
 - `boost`: words or phrases to favor during TDT decoding, one per line, each
   followed by its non-negative strength, for example `symlink 4`, `home dir 4`,
