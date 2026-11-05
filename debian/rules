@@ -7,7 +7,6 @@ UPSTREAM_VERSION = $(shell dpkg-parsechangelog -SVersion | sed 's/-[^-]*$$//')
 	dh $@ --buildsystem=cmake --builddirectory=debian/obj
 
 # ggml is linked statically so the two binaries need no private library directory.
-# GGML_NATIVE=OFF keeps the binaries portable; AVX2/FMA/F16C is the x86-64-v3 baseline.
 override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \
@@ -18,10 +17,7 @@ override_dh_auto_configure:
 		-DPARAKEET_BUILD_TESTS=OFF \
 		-DPARAKEET_GGML_VULKAN=ON \
 		-DBUILD_SHARED_LIBS=OFF \
-		-DGGML_NATIVE=OFF \
-		-DGGML_AVX2=ON \
-		-DGGML_FMA=ON \
-		-DGGML_F16C=ON
+		-DGGML_NATIVE=ON
 
 # The upstream build has no install rules.
 override_dh_auto_install:

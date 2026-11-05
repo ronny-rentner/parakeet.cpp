@@ -1,3 +1,10 @@
+parakeet-cpp (0.6.1+git20261105.7e6f040-3) forky; urgency=medium
+
+  * Run the service as the system user parakeet.
+  * Build ggml with GGML_NATIVE=ON.
+
+ -- Ronny Rentner <debian@ronny-rentner.de>  Thu, 05 Nov 2026 17:20:00 +0100
+
 parakeet-cpp (0.6.1+git20261105.7e6f040-2) forky; urgency=medium
 
   * Listen on port 8081 by default; 8080 is commonly taken.
