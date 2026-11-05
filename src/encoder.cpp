@@ -53,6 +53,20 @@ void Encoder::forward_capture(const std::vector<float>& mel, int n_mels, int T,
                               std::vector<float>& enc_out, int& d_model, int& Tout,
                               const std::vector<int>& capture_layers,
                               std::vector<std::vector<float>>& layer_outs) const {
+    forward_impl(mel, n_mels, T, nullptr, enc_out, d_model, Tout, capture_layers, layer_outs);
+}
+
+void Encoder::forward_rc(const std::vector<float>& mel, int n_mels, int T, const RcMask& rc,
+                         std::vector<float>& enc_out, int& d_model, int& Tout) const {
+    std::vector<int> none;
+    std::vector<std::vector<float>> ignored;
+    forward_impl(mel, n_mels, T, &rc, enc_out, d_model, Tout, none, ignored);
+}
+
+void Encoder::forward_impl(const std::vector<float>& mel, int n_mels, int T, const RcMask* rc,
+                           std::vector<float>& enc_out, int& d_model, int& Tout,
+                           const std::vector<int>& capture_layers,
+                           std::vector<std::vector<float>>& layer_outs) const {
     // The WHOLE encoder is ONE ggml graph: subsampling -> xscaling -> N conformer
     // layers (each FFN1+attn+conv+FFN2+norm_out in-graph) -> final transpose,
     // computed in a SINGLE Backend::compute. (Mel stays plain C++, transposed and
@@ -61,6 +75,16 @@ void Encoder::forward_capture(const std::vector<float>& mel, int n_mels, int T,
     // entire encoder. The per-component graph-BUILDERS (Subsampling/RelPos/
     // ConformerLayer::build_graph) are reused verbatim by the unit tests.
     layer_outs.assign(capture_layers.size(), {});
+
+    // No frames (an empty clip, or a clip shorter than one hop with
+    // parakeet.unified.valid_length): nothing to encode. Return an empty output,
+    // and the decoders emit no tokens.
+    if (T <= 0) {
+        d_model = d_model_;
+        Tout = 0;
+        enc_out.clear();
+        return;
+    }
 
     // Pos_emb is computed host-side once T' is known (deterministic from T, but
     // we read it from the subsampling builder). Storage lives in the pool so it
@@ -84,8 +108,10 @@ void Encoder::forward_capture(const std::vector<float>& mel, int n_mels, int T,
 
             // ---- 3. Positional encoding. Long audio uses NeMo
             //         rel_pos_local_attn (banded, O(T*window)) so attention can't
-            //         OOM; short audio keeps full attention (NeMo-exact). ----
-            const int att_w   = local_attn_window(Tp);
+            //         OOM; short audio keeps full attention (NeMo-exact). The
+            //         window-relative RC mask needs full attention, so it never
+            //         takes the local path. ----
+            const int att_w   = rc ? -1 : local_attn_window(Tp);
             const bool local  = att_w > 0;
             const int pos_len = local ? (2 * att_w + 1) : (2 * Tp - 1);
             std::vector<float>& pe_host = pool.alloc_f32();
@@ -99,7 +125,7 @@ void Encoder::forward_capture(const std::vector<float>& mel, int n_mels, int T,
             for (int i = 0; i < n_layers_; ++i) {
                 ConformerLayer layer(ml_, i);
                 x = layer.build_graph(ctx, x, Tp, pe, pos_len, valid_len, pool,
-                                      local ? att_w : -1, local ? att_w : -1);
+                                      local ? att_w : -1, local ? att_w : -1, rc);
                 // Capture requested layer outputs from the SAME graph (row-major
                 // [T', d_model], matching the layer output orientation).
                 for (size_t c = 0; c < capture_layers.size(); ++c) {
@@ -135,9 +161,10 @@ void Encoder::forward_batch(const MelBatch& mels,
     Subsampling sub(ml_);
     int Tp = 0;
     std::vector<int> vout;
-    // Per-item entry valid frames: offline convention is T-1 per clip.
+    // Per-item entry valid frames: T-1 per clip, or T for a mel already trimmed
+    // to its valid length (see Subsampling::offline_entry_valid).
     std::vector<int> vin(mels.B);
-    for (int b = 0; b < mels.B; ++b) vin[b] = mels.valid_T[b] - 1;
+    for (int b = 0; b < mels.B; ++b) vin[b] = sub.offline_entry_valid(mels.valid_T[b]);
 
     std::vector<float> flat; // receives [d_model, Tp, B] (ne0=d_model fastest)
     bool ok = pk::run_graph(/*mem_bytes*/0, /*n_threads*/0,

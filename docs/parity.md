@@ -31,6 +31,55 @@ CPU, batch 1, deterministic greedy (NeMo 2.7.3).
 | `parakeet-rnnt-1.1b` | RNNT | `rnnt` | 1024 / 42 | 80 | **true** | 1024 | RNNT | **0.0** | PASS |
 | `parakeet_realtime_eou_120m-v1` | Streaming + EOU | `rnnt` | 512 / 17 | 128 | false | 1026 | RNNT (offline, limited-context) | **0.0** | PASS (Phase 5 — 5a milestone) |
 | `nemotron-3.5-asr-streaming-0.6b` | Streaming, multilingual, prompt-conditioned | `rnnt` | 1024 / 24 | 128 | false | 13087 | RNNT offline + cache-aware streaming, per language | **0.0** | PASS (offline + streaming, langs en/de/es/ja-JP/auto) |
+| `nemotron-labs-unified-asr-0.6b` | Unified offline + buffered streaming, multilingual, prompt-conditioned | `rnnt` | 1024 / 24 | 128 | false | 4095 | RNNT offline (full context); buffered streaming (`--stream`, re-encodes each window) | **0.0** (f32, offline, `en`/`de`/`auto` on two clips) | PARTIAL: offline f32 parity on the production path (`parakeet.unified.valid_length`, encoder 2.4e-7 en, 6.0e-7 de; tokens exact). Offline WER 0 on en and de for f32, f16 and q8_0 against the stored NeMo references; `auto` not measured. The mel max abs diff is 2e-4 (en) and 3e-5 (de), see the note below the table |
+
+Buffered streaming (`nemotron-labs-unified-asr-0.6b`, f32, CPU, `test_unified_stream`,
+NeMo cd5e4fbd36ba). Every step of every preset matches NeMo's streaming loop on the
+context, window length, encoder length, decoded frames and tokens, and the final tokens
+and text are identical. The table gives the largest encoder-slice difference (after the
+prompt kernel) for each preset. The test gates it per step: 1e-5 at steady state and 1e-3
+while the left context is still growing (warm-up). Tokens are the hard gate.
+
+| Clip | Preset (L,C,R) | Steps | Tokens / text | Slice max abs diff | Worst step |
+| --- | --- | --- | --- | --- | --- |
+| English (speech.wav) | 70,7,7 | 13 | match | 1.1e-6 | 5 (warm-up) |
+| English | 70,2,5 | 44 | match | 1.4e-6 | 2 (warm-up) |
+| English | 70,1,1 | 92 | match | 2.1e-5 | 9 (warm-up) |
+| German (FLEURS 0000) | 70,7,7 | 32 | match | 5.5e-4 | 4 (warm-up) |
+| German | 70,2,5 | 110 | match | 8.7e-5 | 14 (warm-up) |
+| German | 70,1,1 | 224 | match | 6.5e-4 | 38 (warm-up) |
+
+The warm-up gap is in the front end, not the encoder. On the German windows (out of
+the scratch dump, not committed), our window mel differs from NeMo's by 1.2e-4 to 2.3e-4
+(steps 0-4) and 5e-5 at step 10, the PR1 mel difference computed in double precision against
+NeMo's float32. Per-feature normalization over the few frames of a short window amplifies it. When
+NeMo's own mel is fed to our encoder, the slice difference falls to 2.6e-6 to 1.9e-5 for
+steps 0-4 and 7e-7 at step 10. The window sample counts, the encoder lengths (14, 21, 28, 35,
+42, 84) and the mask and positional-encoding path match NeMo, so the remaining gap is the front end.
+
+Timing, German clip (17.9 s), this CPU (Ryzen 5 7430U, 12 threads, f32), measured under load
+(uptime load average 15 to 25 during the runs). Step time is the run's wall time minus the
+model load (7.0 s from `info`), divided by NeMo's step count. Load is step time divided by
+the chunk duration (C x 80 ms). Realtime at load below 1.
+
+| Preset | Chunk | Steps | Steps per audio second | ms per step | Load |
+| --- | --- | --- | --- | --- | --- |
+| 70,7,7 (1.12 s) | 0.56 s | 32 | 1.8 | 480 | 0.86 |
+| 70,2,5 (0.56 s) | 0.16 s | 110 | 6.1 | 449 | 2.8 |
+| 70,1,1 (0.16 s) | 0.08 s | 224 | 12.5 | 432 | 5.4 |
+
+The window is about the same size for every preset (about 80 encoder frames), so the time
+per step is nearly flat, and small chunks mean more steps. On this laptop CPU, only the
+1.12 s preset keeps up with real time. These are CPU numbers from a shared machine with
+other jobs running; they are not a benchmark. GPU numbers need a leased device.
+
+Note on sub-hop and empty clips: with `parakeet.unified.valid_length` the mel has
+`floor(samples/hop)` frames, so a clip shorter than one hop has no frames. The
+encoder returns an empty output for zero frames, and the decoders return no text.
+The offline paths and the GPU frontend are covered by `test_unified_offline` (CPU
+backend, f32). The synthetic test checks the frame counts on the CPU and GPU frontends.
+
+Note on the unified mel: the English clip differs by 2e-4 at most, in about 20 of 743 frames, mostly in the highest mel bins where the filterbank power is small. The mean difference is 5e-7. The shared mel code computes in double precision and the NeMo reference in float32, so the reference rounding is the likely cause. This is not unified-only code, and it was not changed. The encoder and token stages match.
 
 Notes:
 - `xscaling` = NeMo FastConformer `xscale=sqrt(d_model)` (true) vs `xscale=None` (false).
@@ -738,3 +787,13 @@ PARAKEET_TEST_GGUF=/tmp/pk110m.gguf \
 PARAKEET_TEST_BASELINE_TS=/tmp/baseline_ts.gguf \
 ctest --test-dir build -R "test_timestamps|test_capi_timestamps" --output-on-failure
 ```
+
+## Phonon-2.5 (Fermion Research, container format)
+
+`FermionResearch/Phonon-2.5` and `Phonon-2.5-English` share the v3 architecture and are converted with
+`scripts/convert_hf_parakeet_to_gguf.py --fermion` (see `docs/phonon.md`). There is no NeMo baseline. The reference
+is the stock transformers `ParakeetForTDT` in fp32 on the same weights. On identical log-mel input the
+encoder output of the F32 GGUF differs by at most 1.0e-6 (25 clips, 6 languages; 1.3e-6 on 5 clips for the English
+model), and the token ids and text are identical in all 30 clip runs with parakeet.cpp's own front end.
+The packed (five-value) files are not bit-identical to the dequantized ones (int8 activations); they
+give the same transcripts on the test fixtures, and WER within noise of F16 on a FLEURS subset.

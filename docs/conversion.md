@@ -45,6 +45,15 @@ and `use_bias=true`. nemotron stores `att_context_size` as a **list of presets**
 than a single `[left,right]`, so the converter records all of them in
 `att_context_presets` and uses the first pair for the scalar left/right keys.
 
+The `parakeet.unified.*` keys (written by `scripts/unified_kvs.py`, which `tests/python/check_unified_kvs.py` checks without NeMo) are emitted **only for unified checkpoints**
+(`att_context_style == "chunked_limited_with_rc"`, e.g.
+`nvidia/nemotron-labs-unified-asr-0.6b`). Offline inference is full context, so
+these keys only describe the buffered-streaming presets for a later stage. The
+converter writes no `parakeet.streaming.*` or causal keys for these models, so
+`streaming.present` stays `false` and the `stream_*` C-API refuses them. The
+loader rejects a unified file whose presets are not `[L,C,R]` triples with
+`C >= 1`, or whose default index is out of range.
+
 | Key | GGUF type | Meaning | Source | 110m value |
 | --- | --- | --- | --- | --- |
 | `parakeet.arch` | STRING | One of `ctc` / `rnnt` / `tdt` / `hybrid_rnnt_ctc` / `hybrid_tdt_ctc` | arch detection (below) | `hybrid_tdt_ctc` |
@@ -73,6 +82,11 @@ than a single `[left,right]`, so the converter records all of them in
 | `parakeet.streaming.drop_extra_pre_encoded` | INT32 | Steps dropped after pre-encode. **Streaming only.** | `encoder.streaming_cfg.drop_extra_pre_encoded` | (n/a) |
 | `parakeet.encoder.use_bias` | BOOL | Whether the encoder linear layers carry a bias. `false` for nemotron (`use_bias=false`); the loader reads biases optionally and tolerates their absence. Defaults `true`. | `cfg.encoder.use_bias` | `true` |
 | `parakeet.encoder.att_context_presets` | ARRAY\<INT32\> | Flattened `[l,r,l,r,...]` list of all `att_context_size` presets when the model stores a **list** of `[left,right]` pairs (multi-latency streaming, e.g. nemotron `[[56,3],[56,0],[56,6],[56,13]]`). The first pair is the default and is also written to `att_context_left`/`att_context_right`. **Streaming, multi-context only.** | `cfg.encoder.att_context_size` | (n/a) |
+| `parakeet.unified.present` | BOOL | Marks a unified checkpoint (`chunked_limited_with_rc`). Required when `att_context_style` is `chunked_limited_with_rc`. **Unified only.** | `encoder.att_context_style` | (n/a) |
+| `parakeet.unified.presets` | ARRAY\<INT32\> | Flattened `[L,C,R]` triples of buffered-streaming windows, in 80 ms encoder frames: `[70,13,13, 70,7,7, 70,2,5, 70,1,3, 70,1,2, 70,1,1]` (the model card's presets, through NeMo's `int(seconds*100/8)`). **Unified only.** | model card | (n/a) |
+| `parakeet.unified.valid_length` | BOOL | Offline encoder gets only `floor(samples/hop)` mel frames, the count NeMo passes as `length` (the mel tensor holds one more frame, with its last frame zeroed by the per-feature normalization). Absent means `false`, so the mel is not trimmed. Written `true` for unified checkpoints. **Unified only.** | `encoder.att_context_style` | (n/a) |
+| `parakeet.unified.default_preset` | UINT32 | Index of the default preset (`1`, that is `[70,7,7]`, the card's example). **Unified only.** | model card | (n/a) |
+| `parakeet.unified.train_left` / `train_chunk` / `train_right` | ARRAY\<INT32\> | Window values seen in training (`att_chunk_context_size`). Informational. **Unified only.** | `encoder.att_chunk_context_size` | (n/a) |
 | `parakeet.prompt.present` | BOOL | Marks a prompt-conditioned multilingual model (nemotron). When `true` the C++ engine inserts the `prompt_kernel` (Linear, ReLU, Linear) on the encoder output, selected by a per-utterance language one-hot. Absent/`false` for every other model (which skip the stage entirely). | `model_defaults.initialize_prompt_feature` | (n/a) |
 | `parakeet.prompt.num_prompts` | UINT32 | Width of the language one-hot appended to the encoder output (`prompt_kernel.0` input = `d_model + num_prompts`). **Prompt only.** | `model_defaults.num_prompts` | 128 |
 | `parakeet.prompt.default_lang` | STRING | Locale used when no `--lang`/`target_lang` is given (nemotron: `auto`, prompt index 101). **Prompt only.** | derived (`auto` if present) | `auto` |
@@ -180,6 +194,9 @@ HF tensor names are mapped back to the verbatim NeMo names described below.
 | `--name NAME` | `general.name` (default: the `--hf` directory name) |
 | `--ternary dequant\|keep` | `dequant` (default) expands ternary weights to ordinary ones. `keep` stores them packed, see `docs/ternary.md` |
 | `--vad keep\|drop` | keep (default) or drop the `vad_head.*` tensors and `parakeet.vad.*` KVs when the checkpoint has them |
+| `--fermion RELEASE` | instead of `--hf`: a Phonon-2.5 release (`.bps.tar.zst`, an unpacked directory or a bare `model.fermion`), see `docs/phonon.md` |
+| `--config JSON` | the transformers `config.json` of `nvidia/parakeet-tdt-0.6b-v3`. Needed with `--fermion`; with `--hf` it overrides `<hf>/config.json` |
+| `--sums FILE`, `--sha256 HEX`, `--no-verify` | `--fermion` only: where the archive checksum comes from (default: `SHA256SUMS.txt` next to the archive), or skip the checks |
 
 Extra GGUF content written by this converter:
 

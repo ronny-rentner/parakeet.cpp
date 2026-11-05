@@ -52,9 +52,15 @@ pk_add_test(test_prompt_kernel)
 pk_add_test(test_ternary)
 pk_add_test(test_ternary_model)
 pk_add_test(test_ternary_long)
+pk_add_test(test_fivevalue)
+pk_add_test(test_fivevalue_model)
+pk_add_test(test_fivevalue_gpu)
 add_executable(bench_ternary bench_ternary.cpp)
 target_link_libraries(bench_ternary PRIVATE parakeet)
 target_include_directories(bench_ternary PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party)
+add_executable(dump_encoder dump_encoder.cpp)
+target_link_libraries(dump_encoder PRIVATE parakeet)
+target_include_directories(dump_encoder PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party)
 add_executable(bench_batch_decode bench_batch_decode.cpp)
 target_link_libraries(bench_batch_decode PRIVATE parakeet)
 target_include_directories(bench_batch_decode PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party)
@@ -79,6 +85,16 @@ pk_add_test(test_transcribe_ctc)
 pk_add_test(test_transcribe_rnnt)
 pk_add_test(test_transcribe_eou)
 pk_add_test(test_transcribe_nemotron)
+pk_add_test(test_unified_offline)
+pk_add_test(test_unified_load_negative)
+pk_add_test(test_unified_stream)     # buffered streaming vs NeMo (PARAKEET_TEST_BASELINE_UNIFIED_STREAM)
+pk_add_test(test_capi_stream_unified) # C-API v11 buffered streams: feed sizes, presets, refusals (PARAKEET_TEST_GGUF_UNIFIED)
+pk_add_test(test_unified_synthetic)  # CPU-only, no checkpoint: runs everywhere
+pk_add_test(test_buffered_schedule)  # CPU-only: buffered streaming steps vs NeMo loop, feed-size invariance
+pk_add_test(test_buffered_session_pure)  # CPU-only: text delta, UTF-8 hold-back, failure latch, window checks
+pk_add_test(test_buffered_locale)  # CPU-only: buffered stream JSON numbers independent of LC_NUMERIC (skips without a comma locale)
+pk_add_test(test_rc_mask)           # CPU-only: window-relative RC mask vs NeMo fixture
+set_tests_properties(test_rc_mask PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 pk_add_test(test_transcribe_vad)
 pk_add_test(test_vad_batched)
 pk_add_test(test_streaming_decode)
@@ -200,8 +216,11 @@ set_tests_properties(test_model_loader test_mel test_mel_gpu test_subsampling te
                      test_capi_timestamps test_capi_batch_json test_capi_ctc_logits
                      test_combined_offline test_streaming_diarization test_diarization_accuracy test_diarization
                      PROPERTIES LABELS "model")
-set_tests_properties(test_ternary_model test_ternary_long test_decoder_reuse test_transcribe_vad test_vad_batched test_vad_head test_model_loader_ternary
+set_tests_properties(test_ternary_model test_ternary_long test_fivevalue_model test_fivevalue_gpu test_decoder_reuse test_transcribe_vad test_vad_batched test_vad_head test_model_loader_ternary
                      test_ternary_load_negative test_capi_vad PROPERTIES LABELS "model")
+# Unified (chunked_limited_with_rc) checkpoint: offline parity and loader gate.
+set_tests_properties(test_unified_offline test_unified_load_negative test_unified_stream test_capi_stream_unified
+                     PROPERTIES LABELS "model" WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 # These tests read fixtures/baselines via paths relative to the project root.
 set_tests_properties(test_mel test_mel_gpu test_subsampling test_subsampling_batch test_subsampling_batch_causal test_relpos_attention test_relpos_attention_batch test_conformer test_conformer_batch
                      test_conv_eou test_encoder test_encoder_batch test_encoder_batch_local test_encoder_eou test_streaming_encoder
@@ -217,7 +236,7 @@ set_tests_properties(test_mel test_mel_gpu test_subsampling test_subsampling_bat
                      test_transcribe_ctc test_transcribe_rnnt test_transcribe_eou test_transcribe_nemotron
                      test_streaming_decode test_streaming_eou_reset test_streaming_nemotron test_streaming_mel test_capi test_capi_batch test_capi_concurrency test_pool_stress test_pool_shutdown test_capi_stream test_capi_stream_json
                      test_capi_timestamps test_capi_batch_json test_capi_ctc_logits
-                     test_combined_offline test_streaming_diarization test_diarization_accuracy test_ternary_model test_ternary_long test_transcribe_vad test_vad_batched test_decoder_reuse test_capi_vad
+                     test_combined_offline test_streaming_diarization test_diarization_accuracy test_ternary_model test_ternary_long test_fivevalue_model test_fivevalue_gpu test_transcribe_vad test_vad_batched test_decoder_reuse test_capi_vad
                      PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ctest runs the stress test in its short form (it is heavy on a loaded machine
@@ -231,11 +250,17 @@ if(PARAKEET_PY)
   add_test(NAME check_convert COMMAND ${PARAKEET_PY} ${CMAKE_SOURCE_DIR}/tests/python/check_convert.py)
   set_tests_properties(check_convert PROPERTIES SKIP_RETURN_CODE 77 LABELS "model")
 
+  # CPU-only: the unified metadata writer, with no NeMo and no checkpoint (runs in CI).
+  add_test(NAME check_unified_kvs COMMAND ${PARAKEET_PY} ${CMAKE_SOURCE_DIR}/tests/python/check_unified_kvs.py)
+
   add_test(NAME check_baseline COMMAND ${PARAKEET_PY} ${CMAKE_SOURCE_DIR}/tests/python/check_baseline.py)
   set_tests_properties(check_baseline PROPERTIES SKIP_RETURN_CODE 77 LABELS "model")
 
   add_test(NAME check_hf_convert COMMAND ${PARAKEET_PY} ${CMAKE_SOURCE_DIR}/tests/python/check_hf_convert.py)
   set_tests_properties(check_hf_convert PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_test(NAME check_fermion_reader COMMAND ${PARAKEET_PY} ${CMAKE_SOURCE_DIR}/tests/python/check_fermion_reader.py)
+  set_tests_properties(check_fermion_reader PROPERTIES SKIP_RETURN_CODE 77)
 
   add_test(NAME check_bundle COMMAND ${PARAKEET_PY} ${CMAKE_SOURCE_DIR}/tests/python/check_bundle.py)
   set_tests_properties(check_bundle PROPERTIES SKIP_RETURN_CODE 77)

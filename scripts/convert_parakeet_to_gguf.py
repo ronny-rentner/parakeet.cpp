@@ -27,6 +27,10 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import numpy as np
 
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from unified_kvs import UNIFIED_ATT_STYLE, write_unified_kvs  # noqa: E402
+
 try:
     import gguf
 except ImportError as e:  # pragma: no cover - env guard
@@ -477,7 +481,12 @@ def main():
     # supplies offline-safe defaults (style "regular", causal flags false,
     # streaming block absent) when these keys are missing.
     att_style = str(_get(enc, "att_context_style", "regular"))
-    is_streaming = att_style != "regular"
+    if att_style == UNIFIED_ATT_STYLE:
+        write_unified_kvs(w, str(_get(enc, "conv_context_style", "regular")),
+                          _get(enc, "att_chunk_context_size", None))
+    # Unified checkpoints take their own block above and never reach the
+    # cache-aware streaming block below.
+    is_streaming = att_style not in ("regular", UNIFIED_ATT_STYLE)
     if is_streaming:
         # att_context_size = [left, right]; streaming models use finite values
         # (e.g. [70, 1]) while offline models use [-1, -1]. Stored as signed

@@ -20,6 +20,7 @@ A C++17/[ggml](https://github.com/ggml-org/ggml) port of NVIDIA's [NeMo](https:/
 
 Latest tagged release: **v0.5.0** (2026-08-01). Entries dated after it are on master, not in a release yet: build from source (see [Build](#build)) or use the `:latest` [Docker images](docs/docker.md).
 
+- 🔊 **Phonon-2.5** (2026-10-24): Fermion Research's retrained 25-language and English-only versions of parakeet-tdt-0.6b-v3, as ordinary F16, Q8_0 and Q4_K files for any backend, or as a 242 MB packed file (CPU kernels, or expanded to dense weights on a GPU). [docs](docs/phonon.md)
 - 🧬 **Speaker embeddings from the C API** (2026-10-05): `parakeet_capi_speaker_embed_pcm` returns the voice embedding of a clip, from a standalone encoder or a bundle `voice` component. [docs](docs/speaker.md)
 - 🔏 **Speaker fingerprint** (2026-10-04): the speaker registry records which encoder made each voice print and refuses a model mismatch before naming. [docs](docs/diarization.md)
 - 📦 **Bundle GGUF** (2026-10-04): ASR, VAD, diarization, sound events and speaker voice models in one file, with one licence per component; three bundles are published. [docs](docs/bundle.md)
@@ -158,9 +159,11 @@ All models below are published as GGUF in [mudler/parakeet-cpp-gguf](https://hug
 | [parakeet-tdt_ctc-1.1b](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b) | hybrid TDT+CTC | 1.1B | English |
 | [parakeet_realtime_eou_120m-v1](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) | RNNT, streaming | 120M | Cache-aware streaming with end-of-utterance events (`--stream`) |
 | [nemotron-3.5-asr-streaming-0.6b](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | RNNT, streaming | 0.6B | 40+ locales, language set with `--lang` (default `auto`), offline and streaming. OpenMDW-1.1 |
+| [nemotron-labs-unified-asr-0.6b](https://huggingface.co/nvidia/nemotron-labs-unified-asr-0.6b) | RNNT, unified | 0.6B | 40+ locales, language set with `--lang` (default `auto`), offline and buffered streaming (`--stream`, window set with `--stream-latency` or `--stream-context`). OpenMDW-1.1 |
 | [Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) | Sortformer | n/a | Who spoke when, up to 8 speakers. See [diarization.md](docs/diarization.md) |
 | [parakeet-ultra](https://huggingface.co/moondream/parakeet-ultra) | TDT + VAD head | 0.6B | Moondream, from parakeet-tdt-0.6b-v3. CC-BY-4.0. Not NeMo-validated |
 | [parakeet-redux](https://huggingface.co/moondream/parakeet-redux) | TDT + VAD head | 0.6B | Moondream, ternary encoder. CPU only, offline only. CC-BY-4.0. Not NeMo-validated |
+| [Phonon-2.5](https://huggingface.co/FermionResearch/Phonon-2.5), [Phonon-2.5-English](https://huggingface.co/FermionResearch/Phonon-2.5-English) | TDT | 0.6B | Fermion Research, retrained from parakeet-tdt-0.6b-v3. 25 languages, or English only. The packed file is offline only; it runs on the CPU kernels, or is expanded to dense weights on a GPU. CC-BY-4.0. Not NeMo-validated, see [phonon.md](docs/phonon.md) |
 | [Silero VAD](https://github.com/snakers4/silero-vad) | VAD | 1.3 MB | MIT. 16 kHz and 8 kHz |
 | [CED](https://huggingface.co/mudler/ced-gguf) | sound events | 6 to 88 MB | 527 classes, from [ced.cpp](https://github.com/localai-org/ced.cpp). See [sound.md](docs/sound.md) |
 
@@ -226,7 +229,7 @@ parakeet_capi_free(ctx);
 ```
 
 - **Surface:** offline and streaming transcription (text or JSON with word and token timestamps), batched transcription, VAD (offline and streaming), diarization, speaker-attributed ASR, sound events, the scene stream, speaker identification, bundle loading and the concurrency pool.
-- **ABI:** the current version is **10** (`parakeet_capi_abi_version()`). Later additions (VAD, bundle, encoder fingerprint, concurrency) are additive and keep ABI 10. LocalAI depends on the offline and streaming transcription symbols, so do not change their signatures without a coordinated bump.
+- **ABI:** the current version is **11** (`parakeet_capi_abi_version()`). v11 adds buffered streaming for unified checkpoints (`parakeet_capi_stream_begin_opts` and the stream kind, caps, presets and info queries). Later additions (VAD, bundle, encoder fingerprint, concurrency) are additive. LocalAI depends on the offline and streaming transcription symbols, so do not change their signatures without a coordinated bump.
 - More examples and the JSON shapes: [capi.md](docs/capi.md). Exact signatures: `include/parakeet_capi.h`.
 
 ---
@@ -298,6 +301,7 @@ VAD accuracy, speed and size, Silero against the Parakeet head against whisper.c
 | [vad-benchmarks.md](docs/vad-benchmarks.md) | Every VAD measurement and how to repeat it |
 | [ultra-redux.md](docs/ultra-redux.md) | The Moondream models: files, credits, dequantized Redux |
 | [ternary.md](docs/ternary.md) | Packed ternary format, kernels, limits, speed |
+| [phonon.md](docs/phonon.md) | Phonon-2.5: the container, conversion, parity, WER, the packed files |
 | [bundle.md](docs/bundle.md) | Bundle GGUF format, selection rules, licences, build and verify |
 | [diarization.md](docs/diarization.md) | Diarization, speaker-attributed ASR, encoder fingerprint, speed |
 | [sound.md](docs/sound.md) | Sound events (CED) and the scene stream |
@@ -343,15 +347,18 @@ ctest --test-dir build --output-on-failure -LE model     # no model files needed
 
 Tests labelled `model` need a converted checkpoint (set `PARAKEET_TEST_GGUF` and the other variables listed in AGENTS.md) and skip with exit code 77 when it is missing.
 
-**Community projects** (not maintained by the core team): [parakeet-ios-demo](https://github.com/Kashif-E/parakeet-ios-demo), live on-device streaming speech-to-text on iOS (SwiftUI) over the streaming C API, by [@Kashif-E](https://github.com/Kashif-E).
+**Community projects** (not maintained by the core team):
+
+- [parakeet-ios-demo](https://github.com/Kashif-E/parakeet-ios-demo): live on-device streaming speech-to-text on iOS (SwiftUI) over the streaming C API, by [@Kashif-E](https://github.com/Kashif-E).
+- [parakeet-ffm](https://github.com/jvoice-project/parakeet-ffm): Java wrapper for the C API using the Foreign Function & Memory (FFM) API. See its README for Java requirements and setup.
 
 ---
 
 ## License and credits
 
-parakeet.cpp is released under the [MIT License](LICENSE). The model weights keep the licences of the original models, so check each model card. Most NVIDIA Parakeet models are CC-BY-4.0. `nemotron-3.5-asr-streaming` and Nemotron-3-Diarization are OpenMDW-1.1, `parakeet_realtime_eou_120m-v1` is under the NVIDIA Open Model License, and the Silero VAD files are MIT. Moondream's [parakeet-ultra](https://huggingface.co/moondream/parakeet-ultra) and [parakeet-redux](https://huggingface.co/moondream/parakeet-redux) are CC-BY-4.0: credit Moondream and NVIDIA ([parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)), link the [license](https://creativecommons.org/licenses/by/4.0/), and note that GGUF files made here are converted (and quantized, or dequantized for Redux) copies, not retrained models. The full table is in [docs/licenses.md](docs/licenses.md). A bundle keeps one licence per component (see [bundle.md](docs/bundle.md)).
+parakeet.cpp is released under the [MIT License](LICENSE). The model weights keep the licences of the original models, so check each model card. Most NVIDIA Parakeet models are CC-BY-4.0. `nemotron-3.5-asr-streaming` and Nemotron-3-Diarization are OpenMDW-1.1, `parakeet_realtime_eou_120m-v1` is under the NVIDIA Open Model License, and the Silero VAD files are MIT. Fermion Research's [Phonon-2.5](https://huggingface.co/FermionResearch/Phonon-2.5) and [Phonon-2.5-English](https://huggingface.co/FermionResearch/Phonon-2.5-English) are CC-BY-4.0 too (credit Fermion Research and NVIDIA; their training audio includes CHiME-6 under CC-BY-SA-4.0 and SPGISpeech under Kensho's terms, see [docs/licenses.md](docs/licenses.md)). Moondream's [parakeet-ultra](https://huggingface.co/moondream/parakeet-ultra) and [parakeet-redux](https://huggingface.co/moondream/parakeet-redux) are CC-BY-4.0: credit Moondream and NVIDIA ([parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)), link the [license](https://creativecommons.org/licenses/by/4.0/), and note that GGUF files made here are converted (and quantized, or dequantized for Redux) copies, not retrained models. The full table is in [docs/licenses.md](docs/licenses.md). A bundle keeps one licence per component (see [bundle.md](docs/bundle.md)).
 
-The Parakeet models are by NVIDIA NeMo ([NVIDIA-NeMo/NeMo](https://github.com/NVIDIA-NeMo/NeMo)). Parakeet Ultra and Redux are by [Moondream](https://huggingface.co/moondream), derived from NVIDIA's parakeet-tdt-0.6b-v3. Sound tagging uses [CED](https://github.com/RicherMans/CED) by Heinrich Dinkel and colleagues at Xiaomi. The demo film is Sprite Fright, CC BY 4.0, Blender Studio.
+The Parakeet models are by NVIDIA NeMo ([NVIDIA-NeMo/NeMo](https://github.com/NVIDIA-NeMo/NeMo)). Parakeet Ultra and Redux are by [Moondream](https://huggingface.co/moondream), derived from NVIDIA's parakeet-tdt-0.6b-v3. Phonon-2.5 is by [Fermion Research](https://huggingface.co/FermionResearch), derived from the same model. Sound tagging uses [CED](https://github.com/RicherMans/CED) by Heinrich Dinkel and colleagues at Xiaomi. The demo film is Sprite Fright, CC BY 4.0, Blender Studio.
 
 If you use parakeet.cpp, please cite this repository and the original models:
 

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <stdexcept>
 #include <vector>
 
 namespace pk {
@@ -24,6 +25,7 @@ MelKernel::MelKernel(const ModelLoader& ml) {
     mag_power_ = c.mag_power;
     log_guard_ = c.log_zero_guard;
     per_feature_ = (c.normalize == "per_feature");
+    valid_length_ = c.unified.present && c.unified.valid_length;
 
     // --- Window: lift the Hann window from the GGUF and center-pad to n_fft. ---
     // NeMo builds torch.hann_window(win_length, periodic=False) and passes it to
@@ -106,6 +108,21 @@ void MelKernel::frame_logmel(const double* frame_in, float* out_col, int out_str
 
 MelFrontend::MelFrontend(const ModelLoader& ml) : k_(ml) {}
 
+void trim_mel_frames(std::vector<float>& feats, int n_mels, int& T, int keep) {
+    if (keep >= T) return;
+    if (keep <= 0) {  // a clip shorter than one hop: NeMo's length is 0
+        feats.clear();
+        T = 0;
+        return;
+    }
+    std::vector<float> out((size_t)n_mels * keep);
+    for (int m = 0; m < n_mels; ++m)
+        std::copy(feats.begin() + (size_t)m * T, feats.begin() + (size_t)m * T + keep,
+                  out.begin() + (size_t)m * keep);
+    feats.swap(out);
+    T = keep;
+}
+
 void MelFrontend::compute(const std::vector<float>& samples,
                           std::vector<float>& feats, int& n_mels, int& T) const {
     if (samples.empty()) { n_mels = k_.n_mels_; T = 0; feats.clear(); return; }
@@ -187,6 +204,8 @@ void MelFrontend::compute(const std::vector<float>& samples,
             }
         }
     }
+    // Unified checkpoints: NeMo's encoder never sees the frames past seq_len.
+    if (k_.valid_length_ && seq_len < T) trim_mel_frames(feats, n_mels_, T, seq_len);
 }
 
 // ===========================================================================
@@ -198,9 +217,11 @@ StreamingMel::StreamingMel(const ModelLoader& ml) : k_(ml), pad_(k_.n_fft_ / 2) 
     // there is no whole-utterance normalization. The only streaming model
     // (nvidia/parakeet_realtime_eou_120m-v1) uses normalize="NA"; per_feature
     // would need cross-frame stats and must use MelFrontend::compute instead.
-    assert(!k_.per_feature_ &&
-           "StreamingMel is frame-local; per_feature needs whole-utterance "
-           "stats — use MelFrontend::compute for per_feature models");
+    // A real check, not an assert: Release builds compile asserts out, and a
+    // per_feature model would silently produce wrong features here.
+    if (k_.per_feature_)
+        throw std::runtime_error("StreamingMel is frame-local; per_feature needs whole-utterance "
+                                 "stats: use MelFrontend::compute for per_feature models");
     reset();
 }
 
