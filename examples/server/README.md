@@ -117,20 +117,16 @@ fetcher used by `--model`.
   Loading is serialized; an already-running transcription can continue during
   loading, but new requests wait for the load to finish.
 - `response_format`: `json` (default), `text`, `verbose_json`.
-- `boost_phrase`: repeat this field for each word or phrase to favor during TDT
-  decoding. Matching ignores English letter case and follows word boundaries;
-  punctuation in the output is preserved. Uses greedy decoding.
-- `boost_score`: non-negative strength, default `2` when phrases are supplied;
-  `0` leaves scores unchanged. The bonus is distributed across a phrase's
-  characters, with partial-match bonuses cancelled on a mismatch. Bonuses are
-  applied before token normalization, so this is contextual logit biasing,
-  not an external language model. Boosted requests support `json` or `text`.
+- `boost`: words or phrases to favor during TDT decoding, one per line, each
+  followed by its non-negative strength, for example `symlink 4`, `home dir 4`,
+  `code 8`. The field may be repeated. Matching ignores English letter case and
+  follows word boundaries; punctuation in the output is preserved. The bonus is
+  distributed across a phrase's characters, with partial-match bonuses cancelled
+  on a mismatch; matches ending at the same boundary use the strongest completed
+  bonus. Bonuses are applied before token normalization, so this is contextual
+  logit biasing, not an external language model. `0` leaves scores unchanged.
+  Boosted requests use greedy decoding and support `json` or `text`.
 - `timestamp_granularities[]=word` adds a `words` array to `verbose_json`.
-- `boost_phrases`: URL-encoded pairs mapping each word or phrase to its own non-negative
-  strength, for example `symlink=6&home+dir=4&grammar=3`. Use this field
-  instead of `boost_phrase` and `boost_score`; combining them returns an error.
-  Matching and score application follow the same rules as shared-strength boosting.
-  Matches ending at the same boundary use the strongest completed bonus.
 - `--sound-model` adds a `sound_events` array to `verbose_json`.
 
 ## Known simplifications

@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -218,34 +219,26 @@ int main(int argc, char** argv) {
             if (!parse_format(rf, fmt)) { fail(400, "unsupported response_format '" + rf + "'"); return; }
         }
 
+        // Every `boost` field holds lines of "<phrase> <strength>"; the strength is the last word.
         std::vector<std::pair<std::string, float>> boost_phrases;
-        float boost_score = 2.0f;
-        if (req.has_file("boost_score")) {
-            const std::string& value = req.get_file_value("boost_score").content;
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), boost_score);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
-                !std::isfinite(boost_score) || boost_score < 0 || !req.has_file("boost_phrase")) {
-                fail(400, "boost_score must be finite and non-negative, with at least one boost_phrase");
-                return;
-            }
-        }
-        for (const auto& phrase : req.get_file_values("boost_phrase"))
-            boost_phrases.emplace_back(phrase.content, boost_score);
-        if (req.has_file("boost_phrases")) {
-            if (req.has_file("boost_phrase") || req.has_file("boost_score")) {
-                fail(400, "boost_phrases cannot be combined with boost_phrase or boost_score");
-                return;
-            }
-            httplib::Params phrases;
-            httplib::detail::parse_query_text(req.get_file_value("boost_phrases").content, phrases);
-            for (const auto& [phrase, value] : phrases) {
-                float score;
-                const auto parsed = std::from_chars(value.data(), value.data() + value.size(), score);
-                if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
-                    fail(400, "phrase strengths must be numbers");
+        for (const auto& field : req.get_file_values("boost")) {
+            std::istringstream lines(field.content);
+            std::string line;
+            while (std::getline(lines, line)) {
+                const size_t end = line.find_last_not_of(" \t\r");
+                if (end == std::string::npos) continue;
+                const size_t split = line.find_last_of(" \t", end);
+                if (split == std::string::npos) {
+                    fail(400, "boost line needs a phrase and a strength: " + line);
                     return;
                 }
-                boost_phrases.emplace_back(phrase, score);
+                float score;
+                const auto parsed = std::from_chars(line.data() + split + 1, line.data() + end + 1, score);
+                if (parsed.ec != std::errc{} || parsed.ptr != line.data() + end + 1) {
+                    fail(400, "boost strength must be a number: " + line);
+                    return;
+                }
+                boost_phrases.emplace_back(line.substr(0, split), score);
             }
         }
         std::unique_ptr<pk::PhraseBoost> boost;
