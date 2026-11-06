@@ -1,3 +1,10 @@
+parakeet-cpp (0.6.1+git20261106.3442a9b-2) forky; urgency=medium
+
+  * Restart a running server after upgrades without starting it on initial
+    installation or when it was stopped before the upgrade.
+
+ -- Ronny Rentner <debian@ronny-rentner.de>  Fri, 06 Nov 2026 15:53:26 +0100
+
 parakeet-cpp (0.6.1+git20261106.3442a9b-1) forky; urgency=medium
 
   * Build of commit 3442a9b: cache the phrase matcher, add spelling
