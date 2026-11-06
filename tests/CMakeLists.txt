@@ -119,6 +119,7 @@ pk_add_test(test_asr_committer)
 pk_add_test(test_speaker_registry)
 pk_add_test(test_speaker_identifier)
 pk_add_test(test_write_atomic)
+pk_add_test(test_lowercase)
 pk_add_test(test_speaker_encoder)
 target_compile_definitions(test_speaker_encoder PRIVATE PK_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_tests_properties(test_speaker_encoder PROPERTIES LABELS "model")
@@ -174,6 +175,13 @@ endif()
 
 # Server example unit tests: compile the example's pure units directly
 # (they are not part of libparakeet). No model or network needed.
+add_executable(test_server_spelling test_server_spelling.cpp
+               ${CMAKE_SOURCE_DIR}/examples/server/spelling.cpp)
+target_include_directories(test_server_spelling PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/examples/server)
+target_link_libraries(test_server_spelling PRIVATE parakeet)
+add_test(NAME test_server_spelling COMMAND test_server_spelling)
+
 add_executable(test_server_format test_server_format.cpp
                ${CMAKE_SOURCE_DIR}/examples/server/openai_format.cpp)
 target_include_directories(test_server_format PRIVATE

@@ -130,6 +130,14 @@ fetcher used by `--model`.
   bonus. Bonuses are applied before token normalization, so this is contextual
   logit biasing, not an external language model. `0` leaves scores unchanged.
   Boosted requests use greedy decoding and support `json` or `text`.
+- `spelling`: output spelling followed by a tab and one alternative, one mapping
+  per line. For example, `Ghostty<TAB>ghost ty` replaces `ghost ty` with `Ghostty`
+  (`<TAB>` means a literal tab). The field may be repeated. Matching ignores ASCII
+  case and `Ä/ä`, `Ö/ö`, `Ü/ü`, and requires whole words or phrases. Other letters,
+  spaces and dashes match literally. Only listed alternatives match. The longest
+  match wins; ties use the first mapping. Replacements are not matched again.
+  Corrections affect transcript text in all response formats, including segment
+  text in `verbose_json`; timestamped `words` entries remain as recognized.
 - `timestamp_granularities[]=word` adds a `words` array to `verbose_json`.
 - `--sound-model` adds a `sound_events` array to `verbose_json`.
 

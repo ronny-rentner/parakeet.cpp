@@ -1,7 +1,11 @@
 #include "common.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstring>
+#include <string_view>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -14,6 +18,22 @@
 #endif
 
 namespace pk {
+
+std::string lowercase(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(c < 0x80 ? std::tolower(c) : c); });
+    static constexpr std::pair<std::string_view, std::string_view> umlauts[] = {
+        {"Ä", "ä"}, {"Ö", "ö"}, {"Ü", "ü"},
+    };
+    for (const auto& pair : umlauts) {
+        size_t pos = 0;
+        while ((pos = text.find(pair.first, pos)) != std::string::npos) {
+            text.replace(pos, pair.first.size(), pair.second);
+            pos += pair.second.size();
+        }
+    }
+    return text;
+}
 
 bool write_file_atomic(const std::string& path, const std::string& bytes, std::string* err) {
     auto fail = [&](const std::string& why) {

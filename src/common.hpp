@@ -5,6 +5,9 @@
 
 namespace pk {
 
+// Lowercase ASCII and Ä/Ö/Ü in UTF-8; preserve all other bytes.
+std::string lowercase(std::string text);
+
 // Writes `bytes` to `path` so a reader sees either the old file or the whole
 // new one. It writes `<path>.tmp` in the same directory, checks every write
 // and the close, then replaces `path` with it (MoveFileExA on Windows, rename

@@ -1,6 +1,7 @@
 #include "httplib.h"
 #include "model_fetch.hpp"
 #include "openai_format.hpp"
+#include "spelling.hpp"
 
 #include "parakeet.h"        // parakeet_version
 #include "model.hpp"          // pk::Model
@@ -162,7 +163,6 @@ int main(int argc, char** argv) {
         concurrency = eff;
     }
     const bool pooled = concurrency > 1;
-    // Loaded models stay until idle for --unload-after seconds; `last_used` is stamped at inference.
     struct LoadedModel {
         std::shared_ptr<pk::Model> model;
         std::chrono::steady_clock::time_point last_used;
@@ -172,22 +172,6 @@ int main(int argc, char** argv) {
     std::mutex models_mu;
     std::condition_variable models_cv;
     bool stopping = false;
-    std::thread unloader;
-    if (unload_after > 0) unloader = std::thread([&] {
-        std::unique_lock<std::mutex> lock(models_mu);
-        while (!models_cv.wait_for(lock, std::chrono::seconds(10), [&] { return stopping; })) {
-            const auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(unload_after);
-            for (auto it = models.begin(); it != models.end();) {
-                // A request holding its own shared_ptr keeps use_count above one while it runs.
-                if (it->second.last_used < cutoff && it->second.model.use_count() == 1) {
-                    std::fprintf(stderr, "parakeet-server: unloaded idle model %s\n", it->first.c_str());
-                    it = models.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-    });
 
     // --sound-model is a local path only; it does not go through the ASR
     // model's alias/URL resolver.
@@ -206,7 +190,30 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::thread unloader;
+    if (unload_after > 0) unloader = std::thread([&] {
+        std::unique_lock<std::mutex> lock(models_mu);
+        while (!models_cv.wait_for(lock, std::chrono::seconds(10), [&] { return stopping; })) {
+            const auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(unload_after);
+            for (auto it = models.begin(); it != models.end();) {
+                // A request holding its own shared_ptr keeps use_count above one while it runs.
+                if (it->second.last_used < cutoff && it->second.model.use_count() == 1) {
+                    std::fprintf(stderr, "parakeet-server: unloaded idle model %s\n", it->first.c_str());
+                    it = models.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    });
+
     std::mutex infer_mu;
+
+    // Clients send the same boost list on every request; the matcher is rebuilt only when the list or the model changes.
+    std::mutex boost_mu;
+    std::string boost_model;
+    std::vector<std::pair<std::string, float>> boost_key;
+    std::shared_ptr<pk::PhraseBoost> boost_cache;
 
     httplib::Server svr;
     g_server = &svr;
@@ -232,13 +239,10 @@ int main(int argc, char** argv) {
         {
             std::lock_guard<std::mutex> lock(models_mu);
             if (req.has_file("model") && !req.get_file_value("model").content.empty()) {
-                // A bare file name in the directory of the --model file; paths and URLs are refused.
-                const std::string& requested = req.get_file_value("model").content;
-                if (requested.find('/') != std::string::npos) {
-                    fail(400, "model must be a file name, not a path: " + requested);
-                    return;
-                }
-                path = (std::filesystem::path(model_path).parent_path() / requested).string();
+                const std::filesystem::path requested_path(req.get_file_value("model").content);
+                path = (requested_path.has_parent_path()
+                    ? requested_path
+                    : std::filesystem::path(model_dir) / requested_path).string();
                 if (!std::filesystem::is_regular_file(path)) {
                     fail(400, "model file does not exist: " + path);
                     return;
@@ -284,17 +288,39 @@ int main(int argc, char** argv) {
                 boost_phrases.emplace_back(line.substr(0, split), score);
             }
         }
-        std::unique_ptr<pk::PhraseBoost> boost;
+        std::shared_ptr<pk::PhraseBoost> boost;
         if (!boost_phrases.empty()) {
             if (model->config().tdt_durations.empty() || fmt == Format::kVerboseJson) {
                 fail(400, "phrase boosting requires a TDT model and response_format json or text");
                 return;
             }
-            try {
-                boost = std::make_unique<pk::PhraseBoost>(model->loader().tokenizer_pieces(), boost_phrases);
-            } catch (const std::invalid_argument& e) {
-                fail(400, e.what());
-                return;
+            std::lock_guard<std::mutex> lock(boost_mu);
+            if (boost_model != path || boost_key != boost_phrases) {
+                try {
+                    boost_cache = std::make_shared<pk::PhraseBoost>(model->loader().tokenizer_pieces(), boost_phrases);
+                } catch (const std::invalid_argument& e) {
+                    fail(400, e.what());
+                    return;
+                }
+                boost_model = path;
+                boost_key = boost_phrases;
+            }
+            boost = boost_cache;
+        }
+
+        std::vector<std::pair<std::string, std::string>> spelling;
+        for (const auto& field : req.get_file_values("spelling")) {
+            std::istringstream lines(field.content);
+            std::string line;
+            while (std::getline(lines, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+                const size_t tab = line.find('\t');
+                if (tab == std::string::npos || tab == 0 || tab + 1 == line.size() || line.find('\t', tab + 1) != std::string::npos) {
+                    fail(400, "spelling line needs output<TAB>alternative: " + line);
+                    return;
+                }
+                spelling.emplace_back(line.substr(0, tab), line.substr(tab + 1));
             }
         }
 
@@ -322,10 +348,6 @@ int main(int argc, char** argv) {
                 // the tagger (not thread-safe) takes the lock.
                 std::unique_lock<std::mutex> lock(infer_mu, std::defer_lock);
                 if (!pooled) lock.lock();
-                {
-                    std::lock_guard<std::mutex> lock(models_mu);
-                    models.at(path).last_used = std::chrono::steady_clock::now();
-                }
                 tr = model->transcribe_with_timestamps(pcm, sr, pk::Decoder::kDefault, "", boost.get());
 
                 // Sound tagging is verbose_json-only so json/text requests never
@@ -354,6 +376,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            tr.text = correct_spelling(tr.text, spelling);
             Response out = format_transcription(tr, fmt, duration_sec, include_words,
                                                 have_sounds ? &sound_events : nullptr);
             res.set_content(out.body, out.content_type.c_str());
@@ -362,6 +385,10 @@ int main(int argc, char** argv) {
             res.status = 500;
             res.set_content(error_body("internal transcription error", "server_error"),
                             "application/json");
+        }
+        {
+            std::lock_guard<std::mutex> lock(models_mu);
+            models.at(path).last_used = std::chrono::steady_clock::now();
         }
     });
 

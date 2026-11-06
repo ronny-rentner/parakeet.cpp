@@ -1,6 +1,7 @@
 add_executable(parakeet-server
     main.cpp
     model_fetch.cpp
+    spelling.cpp
     openai_format.cpp)
 target_link_libraries(parakeet-server PRIVATE parakeet)
 target_include_directories(parakeet-server PRIVATE
