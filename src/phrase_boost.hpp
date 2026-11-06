@@ -73,6 +73,7 @@ public:
         }
 
         std::vector<std::string> text_pieces;
+        text_pieces.reserve(pieces.size());
         for (const std::string& piece : pieces) {
             const bool special = !piece.empty() &&
                 ((piece.front() == '<' && piece.back() == '>') ||
@@ -81,6 +82,7 @@ public:
         }
         transitions_.resize(nodes.size());
         for (size_t start = 0; start < nodes.size(); ++start) {
+            transitions_[start].reserve(text_pieces.size());
             for (const std::string& piece : text_pieces) {
                 int state = (int)start;
                 float completed = 0;

@@ -376,7 +376,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            tr.text = correct_spelling(tr.text, spelling);
+            tr.text = correct_spelling(tr.text, std::move(spelling));
             Response out = format_transcription(tr, fmt, duration_sec, include_words,
                                                 have_sounds ? &sound_events : nullptr);
             res.set_content(out.body, out.content_type.c_str());

@@ -8,7 +8,7 @@ namespace pkserver {
 
 std::string correct_spelling(const std::string& text, std::vector<std::pair<std::string, std::string>> spelling) {
     if (spelling.empty()) return text;
-    for (auto& rule : spelling) rule.second = pk::lowercase(rule.second);
+    for (auto& rule : spelling) rule.second = pk::lowercase(std::move(rule.second));
     // The shared lowercase function preserves byte lengths, so matches index the original text.
     const std::string folded = pk::lowercase(text);
     auto boundary = [&](size_t pos, bool before) {
@@ -23,6 +23,7 @@ std::string correct_spelling(const std::string& text, std::vector<std::pair<std:
         return false;
     };
     std::string result;
+    result.reserve(text.size());
     for (size_t pos = 0; pos < text.size();) {
         const std::pair<std::string, std::string>* match = nullptr;
         if (boundary(pos, true)) {
