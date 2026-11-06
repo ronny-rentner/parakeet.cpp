@@ -208,6 +208,12 @@ int main(int argc, char** argv) {
 
     std::mutex infer_mu;
 
+    // Clients send the same boost list on every request; the matcher is rebuilt only when the list or the model changes.
+    std::mutex boost_mu;
+    std::string boost_model;
+    std::vector<std::pair<std::string, float>> boost_key;
+    std::shared_ptr<pk::PhraseBoost> boost_cache;
+
     httplib::Server svr;
     g_server = &svr;
     std::signal(SIGINT, on_signal);
@@ -284,18 +290,24 @@ int main(int argc, char** argv) {
                 boost_phrases.emplace_back(line.substr(0, split), score);
             }
         }
-        std::unique_ptr<pk::PhraseBoost> boost;
+        std::shared_ptr<pk::PhraseBoost> boost;
         if (!boost_phrases.empty()) {
             if (model->config().tdt_durations.empty() || fmt == Format::kVerboseJson) {
                 fail(400, "phrase boosting requires a TDT model and response_format json or text");
                 return;
             }
-            try {
-                boost = std::make_unique<pk::PhraseBoost>(model->loader().tokenizer_pieces(), boost_phrases);
-            } catch (const std::invalid_argument& e) {
-                fail(400, e.what());
-                return;
+            std::lock_guard<std::mutex> lock(boost_mu);
+            if (boost_model != path || boost_key != boost_phrases) {
+                try {
+                    boost_cache = std::make_shared<pk::PhraseBoost>(model->loader().tokenizer_pieces(), boost_phrases);
+                } catch (const std::invalid_argument& e) {
+                    fail(400, e.what());
+                    return;
+                }
+                boost_model = path;
+                boost_key = boost_phrases;
             }
+            boost = boost_cache;
         }
 
         // timestamp_granularities[] = word -> include words[]
