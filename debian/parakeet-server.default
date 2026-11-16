@@ -5,5 +5,8 @@ PARAKEET_MODEL=tdt-0.6b-v2-q8_0.gguf
 # Inference device, for example CPU or Vulkan0. Unset: the first GPU, else CPU.
 #PARAKEET_DEVICE=Vulkan0
 
+# Mesa option for Intel GPUs: full clock speed as soon as a request arrives. Unset: the clock ramps up during the request.
+force_guc_low_latency=true
+
 # Further options, see parakeet-server --help.
 PARAKEET_ARGS=--port 8081
